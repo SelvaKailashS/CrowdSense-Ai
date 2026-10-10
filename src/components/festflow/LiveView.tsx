@@ -113,8 +113,8 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
         return;
       }
       setRun(j.run);
-      setIdx(0);
-      setPlaying(false);
+      // Constraint-1: Preserve current timeline scrub position without resetting
+      setIdx((prev) => (j.run?.result?.ticks?.length ? Math.min(prev, j.run.result.ticks.length - 1) : 0));
       if (save) setMsg("Saved as the actual night. The post-event report now uses it.");
     },
     [festivalId, mode, plannedScenario, actualScenario, rain, shift, drift],
@@ -123,10 +123,12 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
   useEffect(() => {
     loadFestival();
     loadCounts();
-    replay(false);
-    // Initial load only. Later replays are triggered by the Run button.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [festivalId]);
+
+  // Constraint-1: React to live changes automatically without manual re-run
+  useEffect(() => {
+    replay(false);
+  }, [replay]);
 
   useEffect(() => {
     if (!playing || !run) return;
@@ -199,8 +201,14 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
       </header>
 
       <Card
-        title="Replay the night"
-        subtitle="Choose how the night unfolds. Replay runs the model; set the actuals to match what you see on the ground."
+        title="Live Ground Conditions & Incident Controls"
+        subtitle="Real-time changes to rain, event lateness, or crowd surges automatically recalculate all queue predictions, timelines, and AI recommendations."
+        right={
+          <span className="neu-chip text-sage flex items-center gap-1.5">
+            <span className="inline-block h-2 w-2 rounded-full bg-sage animate-pulse" />
+            Live Reactive Engine
+          </span>
+        }
       >
         <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
           <label className="block">
@@ -231,28 +239,89 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
             </select>
           </label>
           <label className="block">
-            <span className={LABEL}>Actual rain %</span>
-            <input className={`${inputCls} mt-2`} type="number" min={0} max={100} value={rain} onChange={(e) => setRain(Number(e.target.value))} />
+            <span className={LABEL}>Live Rain Probability %</span>
+            <input
+              className={`${inputCls} mt-2 font-semibold text-terra`}
+              type="number"
+              min={0}
+              max={100}
+              value={rain}
+              onChange={(e) => setRain(Number(e.target.value))}
+            />
+            <span className="mt-1.5 block text-[11px] text-ink-soft">Rain compresses exit curve into a sharper peak</span>
           </label>
           <label className="block">
-            <span className={LABEL}>Actual lateness (min)</span>
-            <input className={`${inputCls} mt-2`} type="number" min={-30} max={120} step={5} value={shift} onChange={(e) => setShift(Number(e.target.value))} />
-            <span className="mt-1.5 block text-[11px] text-ink-soft">Positive = crowd leaves later than forecast</span>
+            <span className={LABEL}>Final Event Lateness (min)</span>
+            <input
+              className={`${inputCls} mt-2 font-semibold text-terra`}
+              type="number"
+              min={-30}
+              max={120}
+              step={5}
+              value={shift}
+              onChange={(e) => setShift(Number(e.target.value))}
+            />
+            <span className="mt-1.5 block text-[11px] text-ink-soft">e.g. +30 = headliner runs 30 min late</span>
           </label>
           <label className="block">
             <span className={LABEL}>Crowd ignores guidance (pts to main stand)</span>
             <input className={`${inputCls} mt-2`} type="number" min={0} max={40} step={1} value={drift} onChange={(e) => setDrift(Number(e.target.value))} />
+            <span className="mt-1.5 block text-[11px] text-ink-soft">Crowd drift off peripheral terminals</span>
           </label>
           <div className="flex flex-wrap items-end gap-3 sm:col-span-2">
-            <button onClick={() => replay(false)} disabled={busy} className={btn}>
-              {busy ? "Running…" : "Run replay"}
-            </button>
             <button onClick={() => replay(true)} disabled={busy} className={btnGhost}>
-              Save as actual night
+              {busy ? "Saving…" : "Save as actual night (for Audit Report)"}
             </button>
           </div>
         </div>
-        {msg && <p className="mt-5 text-sm text-ink">{msg}</p>}
+
+        {/* Live Incident Trigger Presets (Constraint-1) */}
+        <div className="mt-5 flex flex-wrap items-center gap-2 pt-4 border-t border-black/5 dark:border-white/5">
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-ink-soft mr-1">
+            Simulate Live Incidents:
+          </span>
+          <button
+            type="button"
+            onClick={() => setRain(85)}
+            className={`neu-chip cursor-pointer transition-all ${
+              rain >= 70 ? "text-terra font-bold ring-2 ring-terra" : "text-ink-soft hover:text-ink"
+            }`}
+          >
+            🌧️ Rain Starting (85%)
+          </button>
+          <button
+            type="button"
+            onClick={() => setShift(30)}
+            className={`neu-chip cursor-pointer transition-all ${
+              shift === 30 ? "text-terra font-bold ring-2 ring-terra" : "text-ink-soft hover:text-ink"
+            }`}
+          >
+            ⏱️ Final Event +30m Late
+          </button>
+          <button
+            type="button"
+            onClick={() => setActualScenario("high")}
+            className={`neu-chip cursor-pointer transition-all ${
+              actualScenario === "high" ? "text-terra font-bold ring-2 ring-terra" : "text-ink-soft hover:text-ink"
+            }`}
+          >
+            🚨 Crowd Surge (+30%)
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setRain(20);
+              setShift(0);
+              setActualScenario("base");
+              setDrift(0);
+            }}
+            className="neu-chip cursor-pointer text-sage hover:text-ink ml-auto"
+          >
+            ☀️ Reset Normal Conditions
+          </button>
+        </div>
+
+        {msg && <p className="mt-4 text-sm text-sage font-medium">{msg}</p>}
       </Card>
 
       {run && totals && (
