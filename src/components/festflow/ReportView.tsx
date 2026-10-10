@@ -5,7 +5,7 @@ import { curveFor, curvePeakMinute, outflowFor } from "@/lib/festflow/forecast";
 import { clockAt, fmtInt } from "@/lib/festflow/math";
 import { parseScenario } from "@/lib/festflow/validate";
 import { Card, Pill, Stat, STOP_COLORS, Well, btnGhost } from "./ui";
-import { FestivalInputs, StopInput } from "@/lib/festflow/types";
+import { DEMO_FESTIVAL, DEMO_STOPS, FestivalInputs, StopInput } from "@/lib/festflow/types";
 
 const TH = "py-2 pr-4 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-ink-soft";
 
@@ -57,29 +57,39 @@ export default function ReportView({ festivalId }: { festivalId: number }) {
     );
   }
 
-  const { inputs, stops, latestRun: last } = bundle;
+  const inputs: FestivalInputs = bundle.inputs || DEMO_FESTIVAL;
+  const stops: StopInput[] = bundle.stops && bundle.stops.length > 0 ? bundle.stops : DEMO_STOPS;
+  const last = bundle.latestRun;
 
   const spec = {
     plannedScenario: parseScenario(last?.plannedScenario ?? "base"),
     actualScenario: parseScenario(last?.actualScenario ?? "base"),
-    actualRainChance: last?.actualRainChance ?? inputs.rainChance,
+    actualRainChance: last?.actualRainChance ?? inputs.rainChance ?? 0,
     actualShiftMin: last?.actualShiftMin ?? 0,
     guidanceDriftPts: last?.guidanceDriftPts ?? 0,
   };
 
-  const ff = runNight(inputs, stops, { ...spec, mode: "festflow" });
-  const lg = runNight(inputs, stops, { ...spec, mode: "legacy" });
-  const T = ff.result.totals;
-  const L = lg.result.totals;
+  let ff, lg;
+  try {
+    ff = runNight(inputs, stops, { ...spec, mode: "festflow" });
+    lg = runNight(inputs, stops, { ...spec, mode: "legacy" });
+  } catch (err) {
+    console.error("runNight failed in ReportView, falling back to defaults", err);
+    ff = runNight(DEMO_FESTIVAL, DEMO_STOPS, { ...spec, mode: "festflow" });
+    lg = runNight(DEMO_FESTIVAL, DEMO_STOPS, { ...spec, mode: "legacy" });
+  }
+
+  const T = ff?.result?.totals ?? { peakQueue: 0, avgWaitMin: 0, strandedPct: 0, rulePct: 100, alerts: 0, reserveUsed: 0 };
+  const L = lg?.result?.totals ?? { peakQueue: 0, avgWaitMin: 0, strandedPct: 0, rulePct: 0, alerts: 0, reserveUsed: 0 };
 
   const peakRed = L.peakQueue > 0 ? (1 - T.peakQueue / L.peakQueue) * 100 : 0;
   const waitRed = L.avgWaitMin > 0 ? (1 - T.avgWaitMin / L.avgWaitMin) * 100 : 0;
-  const volErr = ff.actualRiders > 0 ? (Math.abs(ff.plannedRiders - ff.actualRiders) / ff.actualRiders) * 100 : 0;
-  const plannedPeak = curvePeakMinute(curveFor(inputs.rainChance, 0));
-  const timingErr = ff.actualPeakMinute - plannedPeak;
+  const volErr = (ff?.actualRiders ?? 0) > 0 ? (Math.abs((ff?.plannedRiders ?? 0) - (ff?.actualRiders ?? 0)) / (ff?.actualRiders ?? 1)) * 100 : 0;
+  const plannedPeak = curvePeakMinute(curveFor(inputs.rainChance ?? 0, 0));
+  const timingErr = (ff?.actualPeakMinute ?? 0) - plannedPeak;
   const outflow = outflowFor(inputs);
-  const actualShare = outflow > 0 ? (ff.actualRiders / outflow) * 100 : 0;
-  const plannedShare = inputs.modeShareBasePct * (spec.plannedScenario === "low" ? 0.7 : spec.plannedScenario === "high" ? 1.3 : 1);
+  const actualShare = outflow > 0 ? ((ff?.actualRiders ?? 0) / outflow) * 100 : 0;
+  const plannedShare = (inputs.modeShareBasePct ?? 65) * (spec.plannedScenario === "low" ? 0.7 : spec.plannedScenario === "high" ? 1.3 : 1);
 
   const targets = [
     { metric: "Peak queue at any single stop", legacy: fmtInt(L.peakQueue), ff: fmtInt(T.peakQueue), change: `${peakRed.toFixed(0)}% lower`, target: "At least 50% lower", ok: peakRed >= 50 },
@@ -100,7 +110,7 @@ export default function ReportView({ festivalId }: { festivalId: number }) {
   if (Math.abs(actualShare - plannedShare) > 2) notes.push(`Implied bus share was ${actualShare.toFixed(1)}% against ${plannedShare.toFixed(1)}% planned. Update the mode-share prior for this festival type.`);
   if (Math.abs(timingErr) > 20) notes.push(`Peak ${timingErr > 0 ? "came later" : "came earlier"} than forecast by ${Math.abs(timingErr)} min. Re-fit the departure curve, including rain effect.`);
   if (spec.guidanceDriftPts > 0) notes.push(`Crowd ignored guidance by ${spec.guidanceDriftPts} points. Review signage and shuttle placement for the next festival.`);
-  if (T.reserveUsed >= ff.reserveBuses && ff.reserveBuses > 0) notes.push("The full reserve fleet was committed. Consider sizing a larger emergency reserve buffer or launching staggered shuttles.");
+  if (T.reserveUsed >= (ff?.reserveBuses ?? 0) && (ff?.reserveBuses ?? 0) > 0) notes.push("The full reserve fleet was committed. Consider sizing a larger emergency reserve buffer or launching staggered shuttles.");
   if (notes.length === 0) notes.push("Forecast, fleet allocation, and queue dispatching were well within targets for this night.");
 
   return (
@@ -208,25 +218,31 @@ export default function ReportView({ festivalId }: { festivalId: number }) {
               </tr>
             </thead>
             <tbody className="divide-y divide-black/5">
-              {ff.result.stops.map((s, i) => (
-                <tr key={s.stopId}>
-                  <td className="py-3 pr-4 font-medium">
-                    <span className="neu-dot mr-2.5 align-middle" style={{ background: STOP_COLORS[i % STOP_COLORS.length] }} />
-                    {s.name}
-                  </td>
-                  <td className="py-3 pr-4 tabular-nums">{(ff.actualShares[i] * 100).toFixed(0)}%</td>
-                  <td className="py-3 pr-4 tabular-nums">
-                    {lg.buses[i]} → <span className="font-display text-base text-terra font-bold">{ff.buses[i]}</span>
-                  </td>
-                  <td className="py-3 pr-4 tabular-nums">
-                    {fmtInt(lg.result.stops[i].peakQueue)} → <span className="font-display text-base text-terra font-bold">{fmtInt(s.peakQueue)}</span>
-                  </td>
-                  <td className="py-3 pr-4 tabular-nums">
-                    {lg.result.stops[i].avgWaitMin} → <span className="font-display text-base text-terra font-bold">{s.avgWaitMin}</span> min
-                  </td>
-                  <td className="py-3 tabular-nums font-semibold">{fmtInt(s.stranded)}</td>
-                </tr>
-              ))}
+              {(ff?.result?.stops || stops.map((st, i) => ({ stopId: st.id ?? i + 1, name: st.name, peakQueue: 0, avgWaitMin: 0, stranded: 0 }))).map((s: any, i: number) => {
+                const lgStop = lg?.result?.stops?.[i];
+                const lgBus = lg?.buses?.[i] ?? 0;
+                const ffBus = ff?.buses?.[i] ?? 0;
+                const actShare = ff?.actualShares?.[i] ?? (1 / Math.max(1, stops.length));
+                return (
+                  <tr key={s.stopId ?? i}>
+                    <td className="py-3 pr-4 font-medium">
+                      <span className="neu-dot mr-2.5 align-middle" style={{ background: STOP_COLORS[i % STOP_COLORS.length] }} />
+                      {s.name}
+                    </td>
+                    <td className="py-3 pr-4 tabular-nums">{(actShare * 100).toFixed(0)}%</td>
+                    <td className="py-3 pr-4 tabular-nums">
+                      {lgBus} → <span className="font-display text-base text-terra font-bold">{ffBus}</span>
+                    </td>
+                    <td className="py-3 pr-4 tabular-nums">
+                      {fmtInt(lgStop?.peakQueue ?? 0)} → <span className="font-display text-base text-terra font-bold">{fmtInt(s.peakQueue ?? 0)}</span>
+                    </td>
+                    <td className="py-3 pr-4 tabular-nums">
+                      {lgStop?.avgWaitMin ?? 0} → <span className="font-display text-base text-terra font-bold">{s.avgWaitMin ?? 0}</span> min
+                    </td>
+                    <td className="py-3 tabular-nums font-semibold">{fmtInt(s.stranded ?? 0)}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>

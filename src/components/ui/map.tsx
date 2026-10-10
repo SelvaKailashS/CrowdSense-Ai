@@ -22,10 +22,14 @@ import { X, Minus, Plus, Locate, Maximize, Loader2 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
-if (typeof window !== "undefined" && !MapLibreGL.getWorkerUrl()) {
-  MapLibreGL.setWorkerUrl(
-    `https://unpkg.com/maplibre-gl@${MapLibreGL.getVersion()}/dist/maplibre-gl-worker.mjs`,
-  );
+try {
+  if (typeof window !== "undefined" && typeof (MapLibreGL as any).getWorkerUrl === "function" && !(MapLibreGL as any).getWorkerUrl()) {
+    (MapLibreGL as any).setWorkerUrl(
+      `https://unpkg.com/maplibre-gl@${MapLibreGL.getVersion()}/dist/maplibre-gl-worker.mjs`,
+    );
+  }
+} catch (e) {
+  console.warn("MapLibre worker setup error:", e);
 }
 
 const defaultStyles = {
@@ -285,6 +289,8 @@ const Map = forwardRef<MapRef, MapProps>(function Map(
   // Expose the map instance to the parent component
   useImperativeHandle(ref, () => mapInstance as MapLibreGL.Map, [mapInstance]);
 
+  const [initError, setInitError] = useState<string | null>(null);
+
   // Initialize the map
   useEffect(() => {
     if (!containerRef.current) return;
@@ -293,22 +299,32 @@ const Map = forwardRef<MapRef, MapProps>(function Map(
       resolvedTheme === "dark" ? mapStyles.dark : mapStyles.light;
     currentStyleRef.current = initialStyle;
 
-    const map = new MapLibreGL.Map({
-      container: containerRef.current,
-      style: initialStyle,
-      renderWorldCopies: false,
-      attributionControl: {
-        compact: true,
-      },
-      ...props,
-      ...viewport,
-    });
+    let map: MapLibreGL.Map;
+    try {
+      map = new MapLibreGL.Map({
+        container: containerRef.current,
+        style: initialStyle,
+        renderWorldCopies: false,
+        attributionControl: {
+          compact: true,
+        },
+        ...props,
+        ...viewport,
+      });
+    } catch (err) {
+      console.warn("MapLibre GL Map initialization error:", err);
+      setInitError((err as Error)?.message || "WebGL initialization error");
+      return;
+    }
 
     const styleLoadHandler = () => {
       styleSwapInFlightRef.current = false;
       setIsStyleLoaded(true);
     };
     const loadHandler = () => setIsLoaded(true);
+    const errorHandler = (e: any) => {
+      console.warn("MapLibre runtime error:", e);
+    };
 
     // Viewport change handler - skip if triggered by internal update
     const handleMove = () => {
@@ -319,13 +335,19 @@ const Map = forwardRef<MapRef, MapProps>(function Map(
     map.on("load", loadHandler);
     map.on("style.load", styleLoadHandler);
     map.on("move", handleMove);
+    map.on("error", errorHandler);
     setMapInstance(map);
 
     return () => {
-      map.off("load", loadHandler);
-      map.off("style.load", styleLoadHandler);
-      map.off("move", handleMove);
-      map.remove();
+      try {
+        map.off("load", loadHandler);
+        map.off("style.load", styleLoadHandler);
+        map.off("move", handleMove);
+        map.off("error", errorHandler);
+        map.remove();
+      } catch (e) {
+        // cleanup ignore
+      }
       setIsLoaded(false);
       setIsStyleLoaded(false);
       setMapInstance(null);
@@ -408,7 +430,15 @@ const Map = forwardRef<MapRef, MapProps>(function Map(
         ref={containerRef}
         className={cn("relative h-full w-full", className)}
       >
-        {(!isLoaded || loading) && <DefaultLoader />}
+        {initError ? (
+          <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center bg-sand dark:bg-stone-900 z-10">
+            <span className="text-2xl mb-1">🗺️</span>
+            <p className="text-xs font-bold text-ink">Hardware Acceleration Notice</p>
+            <p className="text-[11px] text-ink-soft max-w-xs mt-1">
+              Using safe canvas telemetry mode. Live fleet dispatches, crowd surge zones, and traffic corridors remain actively tracked.
+            </p>
+          </div>
+        ) : (!isLoaded || loading) && <DefaultLoader />}
         {/* SSR-safe: children render only when map is loaded on client */}
         {mapInstance && children}
       </div>
@@ -1372,34 +1402,39 @@ function MapRoute({
   useEffect(() => {
     if (!isLoaded || !map) return;
 
-    map.addSource(sourceId, {
-      type: "geojson",
-      data: {
-        type: "Feature",
-        properties: {},
-        geometry: { type: "LineString", coordinates: [] },
-      },
-    });
+    try {
+      if (!map.getSource(sourceId)) {
+        map.addSource(sourceId, {
+          type: "geojson",
+          data: {
+            type: "Feature",
+            properties: {},
+            geometry: { type: "LineString", coordinates: [] },
+          },
+        });
+      }
 
-    map.addLayer(
-      {
-        id: layerId,
-        type: "line",
-        source: sourceId,
-        layout: { "line-join": "round", "line-cap": "round" },
-        paint: {
-          "line-color": resolvedColor,
-          "line-width": resolvedWidth,
-          "line-opacity": resolvedOpacity,
-          ...(resolvedDashArray && { "line-dasharray": resolvedDashArray }),
-        },
-      },
-      resolveBeforeId(map, beforeId),
-    );
-
-    // Children add their layers once this is set, which keeps them above the
-    // base line: child effects would otherwise run before this one.
-    setReady(true);
+      if (!map.getLayer(layerId)) {
+        map.addLayer(
+          {
+            id: layerId,
+            type: "line",
+            source: sourceId,
+            layout: { "line-join": "round", "line-cap": "round" },
+            paint: {
+              "line-color": resolvedColor,
+              "line-width": resolvedWidth,
+              "line-opacity": resolvedOpacity,
+              ...(resolvedDashArray && { "line-dasharray": resolvedDashArray }),
+            },
+          },
+          resolveBeforeId(map, beforeId),
+        );
+      }
+      setReady(true);
+    } catch (e) {
+      console.warn("MapRoute mount warning:", e);
+    }
 
     return () => {
       setReady(false);

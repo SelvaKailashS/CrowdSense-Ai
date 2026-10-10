@@ -11,10 +11,10 @@ import Link, { getEffectiveRoute, navigateTo } from "./shim/next-link";
 initMockApi();
 
 class ErrorBoundary extends React.Component<
-  { children: React.ReactNode },
+  { children: React.ReactNode; title?: string },
   { hasError: boolean; error: Error | null }
 > {
-  constructor(props: { children: React.ReactNode }) {
+  constructor(props: { children: React.ReactNode; title?: string }) {
     super(props);
     this.state = { hasError: false, error: null };
   }
@@ -32,11 +32,11 @@ class ErrorBoundary extends React.Component<
       return (
         <div className="neu-raised p-8 text-center max-w-xl mx-auto my-12">
           <p className="text-3xl mb-2">⚠️</p>
-          <h2 className="text-xl font-bold font-display text-brick">Control Room Error</h2>
+          <h2 className="text-xl font-bold font-display text-brick">{this.props.title || "Module Error"}</h2>
           <p className="mt-2 text-sm text-ink-soft leading-relaxed">
-            {this.state.error?.message || "An unexpected error occurred while loading telemetry."}
+            {this.state.error?.message || "An unexpected error occurred while loading this view."}
           </p>
-          <div className="mt-6 flex justify-center gap-3">
+          <div className="mt-6 flex flex-wrap justify-center gap-3">
             <button
               onClick={() => {
                 this.setState({ hasError: false, error: null });
@@ -45,6 +45,18 @@ class ErrorBoundary extends React.Component<
               className="neu-btn px-4 py-2 text-xs font-bold text-terra cursor-pointer"
             >
               ↻ Reload Application
+            </button>
+            <button
+              onClick={() => {
+                try {
+                  localStorage.removeItem("crowdsense_festivals_v1");
+                } catch {}
+                this.setState({ hasError: false, error: null });
+                window.location.reload();
+              }}
+              className="neu-btn px-4 py-2 text-xs font-semibold text-ochre cursor-pointer"
+            >
+              🧹 Reset Data Cache
             </button>
             <button
               onClick={() => {
@@ -352,11 +364,21 @@ export function App() {
           </div>
         )}
 
-        <ErrorBoundary>
-          {view === "planner" && <PlannerView festivalId={activeFestivalId} />}
-          {view === "live" && <LiveView festivalId={activeFestivalId} />}
-          {view === "report" && <ReportView festivalId={activeFestivalId} />}
-        </ErrorBoundary>
+        {view === "planner" && (
+          <ErrorBoundary title="Planner Error">
+            <PlannerView festivalId={activeFestivalId} />
+          </ErrorBoundary>
+        )}
+        {view === "live" && (
+          <ErrorBoundary title="Control Room Error">
+            <LiveView festivalId={activeFestivalId} />
+          </ErrorBoundary>
+        )}
+        {view === "report" && (
+          <ErrorBoundary title="Audit Report Error">
+            <ReportView festivalId={activeFestivalId} />
+          </ErrorBoundary>
+        )}
       </main>
 
       {/* Footer */}
