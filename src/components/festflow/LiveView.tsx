@@ -8,6 +8,7 @@ import { SCENARIOS } from "@/lib/festflow/types";
 import { clockAt, fmtInt } from "@/lib/festflow/math";
 import { QueueChart } from "./charts";
 import { Card, Pill, Stat, STOP_COLORS, Well, btn, btnGhost, btnTone, inputCls, type Tone } from "./ui";
+import { AiAdvisor } from "./AiAdvisor";
 
 interface RunPayload {
   mode: Mode;
@@ -288,6 +289,33 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
               tone={totals.alerts > 0 ? "bad" : "good"}
             />
           </div>
+
+          <AiAdvisor
+            context={{
+              festivalName: name || "Festival",
+              currentClock: curClock,
+              minute: curMinute,
+              threshold,
+              stops: run.stopNames.map((n, s) => ({
+                name: n,
+                queue: cur ? cur.queues[s] ?? 0 : 0,
+                readyBuses: cur ? cur.ready[s] ?? 0 : 0,
+                status: cur
+                  ? (cur.queues[s] ?? 0) >= threshold
+                    ? "ALERT"
+                    : (cur.queues[s] ?? 0) > cap / 2
+                    ? "BEHIND"
+                    : "OK"
+                  : "OK",
+              })),
+              totalStranded: totals.stranded,
+              totalAlerts: totals.alerts,
+              reserveUsed: totals.reserveUsed,
+              totalReserve: run.reserveBuses,
+              rainChance: rain,
+              mode: run.mode,
+            }}
+          />
 
           <Card
             title="Night timeline"
