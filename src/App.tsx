@@ -36,6 +36,27 @@ const STEPS = [
 export function App() {
   const [route, setRoute] = useState<string>(() => window.location.hash.replace(/^#/, "") || "/");
   const [festivalsList, setFestivalsList] = useState<any[]>([]);
+  const [isDark, setIsDark] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem("crowdsense_theme");
+      if (saved) return saved === "dark";
+      return window.matchMedia("(prefers-color-scheme: dark)").matches;
+    } catch {
+      return false;
+    }
+  });
+
+  useEffect(() => {
+    if (isDark) {
+      document.documentElement.classList.add("dark");
+      document.documentElement.setAttribute("data-theme", "dark");
+      localStorage.setItem("crowdsense_theme", "dark");
+    } else {
+      document.documentElement.classList.remove("dark");
+      document.documentElement.removeAttribute("data-theme");
+      localStorage.setItem("crowdsense_theme", "light");
+    }
+  }, [isDark]);
 
   useEffect(() => {
     const handleHashChange = () => {
@@ -134,6 +155,14 @@ export function App() {
               Audit Report
             </Link>
             <span className="neu-chip ml-2 hidden md:inline-flex text-sage">● Real-Time AI Active</span>
+            <button
+              onClick={() => setIsDark((d) => !d)}
+              className="neu-btn px-3 py-1.5 text-xs rounded-xl"
+              title={isDark ? "Switch to Warm Clay light mode" : "Switch to Deep Obsidian dark mode"}
+              aria-label="Toggle dark mode"
+            >
+              {isDark ? "☀️ Light" : "🌙 Dark"}
+            </button>
           </div>
         </div>
       </nav>

@@ -1,11 +1,11 @@
 import { fmtInt } from "@/lib/festflow/math";
 import { STOP_COLORS } from "./ui";
 
-// Chart palette: pencil-like ink for axes, warm grey for grid.
-const GRID = "#d2cabf";
-const AXIS_TEXT = "#6b6358";
-const INK = "#3a3631";
-const BRICK = "#a0392c";
+// Chart palette: dynamic CSS variables adapting to light/dark themes
+const GRID = "var(--chart-grid, #d2cabf)";
+const AXIS_TEXT = "var(--chart-axis, #6b6358)";
+const INK = "var(--color-ink, #3a3631)";
+const BRICK = "var(--color-brick, #a0392c)";
 
 interface ForecastSlot {
   minute: number;
