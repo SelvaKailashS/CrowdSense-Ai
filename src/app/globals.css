@@ -1,0 +1,188 @@
+@import "tailwindcss";
+
+/*
+ * FestFlow · neumorphic theme ("Clay & Paper")
+ * Warm clay surfaces, soft paired shadows, pressable wells, and a faint paper grain
+ * so the interface reads as made by hand rather than generated from a template.
+ */
+
+@theme {
+  --color-neu: #e7e2db;
+  --color-neu-hi: #fcfaf6;
+  --color-neu-lo: #c7bfb3;
+  --color-ink: #3a3631;
+  --color-ink-soft: #6b6358;
+  --color-terra: #98481f;
+  --color-ochre: #7a5612;
+  --color-sage: #41624d;
+  --color-brick: #a0392c;
+  --color-slateblue: #3f6184;
+  --color-stone: #7b7062;
+
+  --font-display: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Palatino, Georgia, serif;
+  --font-sans: "Avenir Next", "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+
+:root {
+  --neu: #e7e2db;
+  --neu-hi: #fcfaf6;
+  --neu-lo: #c7bfb3;
+}
+
+@layer base {
+  html,
+  body {
+    background: var(--neu);
+    color: var(--color-ink);
+  }
+
+  body {
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    min-height: 100vh;
+  }
+
+  /* Paper grain over the whole page. Non-interactive. */
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: 999;
+    pointer-events: none;
+    opacity: 0.55;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='220' height='220'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.25  0 0 0 0 0.2  0 0 0 0 0.15  0 0 0 0.09 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-terra);
+    outline-offset: 3px;
+    border-radius: 10px;
+  }
+
+  input[type="range"] {
+    accent-color: var(--color-terra);
+  }
+}
+
+@layer components {
+  /* Raised surface: cards and the navigation bar. */
+  .neu-raised {
+    background: var(--neu);
+    border-radius: 24px;
+    box-shadow: 9px 9px 18px var(--neu-lo), -9px -9px 18px var(--neu-hi);
+  }
+
+  .neu-raised-sm {
+    background: var(--neu);
+    border-radius: 18px;
+    box-shadow: 5px 5px 11px var(--neu-lo), -5px -5px 11px var(--neu-hi);
+  }
+
+  /* Pressed well: stat tiles, chart wells, step tiles. */
+  .neu-inset {
+    background: var(--neu);
+    border-radius: 18px;
+    box-shadow: inset 5px 5px 10px var(--neu-lo), inset -5px -5px 10px var(--neu-hi);
+  }
+
+  /* Pressable button. Text colour comes from text-* utilities. */
+  .neu-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4rem;
+    background: var(--neu);
+    border-radius: 14px;
+    padding: 0.55rem 1rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    box-shadow: 5px 5px 10px var(--neu-lo), -5px -5px 10px var(--neu-hi);
+    transition:
+      box-shadow 0.18s ease,
+      transform 0.08s ease,
+      color 0.18s ease;
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .neu-btn:hover:not(:disabled) {
+    color: var(--color-terra);
+  }
+
+  .neu-btn:active:not(:disabled),
+  .neu-btn.neu-btn-on {
+    box-shadow: inset 3px 3px 7px var(--neu-lo), inset -3px -3px 7px var(--neu-hi);
+  }
+
+  .neu-btn:active:not(:disabled) {
+    transform: translateY(1px);
+  }
+
+  .neu-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  /* Text field: a well you type into. */
+  .neu-field {
+    width: 100%;
+    background: var(--neu);
+    border: none;
+    border-radius: 12px;
+    padding: 0.55rem 0.75rem;
+    font-size: 0.875rem;
+    color: var(--color-ink);
+    box-shadow: inset 3px 3px 7px var(--neu-lo), inset -3px -3px 7px var(--neu-hi);
+    transition: box-shadow 0.18s ease;
+  }
+
+  .neu-field::placeholder {
+    color: var(--color-ink-soft);
+    opacity: 0.7;
+  }
+
+  .neu-field:focus {
+    outline: none;
+    box-shadow:
+      inset 3px 3px 7px var(--neu-lo),
+      inset -3px -3px 7px var(--neu-hi),
+      0 0 0 2px rgba(152, 72, 31, 0.35);
+  }
+
+  .neu-field:disabled {
+    opacity: 0.55;
+  }
+
+  /* Status chip, pressed into the surface. */
+  .neu-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    background: var(--neu);
+    border-radius: 999px;
+    padding: 0.2rem 0.7rem;
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    box-shadow: inset 2px 2px 5px var(--neu-lo), inset -2px -2px 5px var(--neu-hi);
+    white-space: nowrap;
+  }
+
+  /* Small raised dot used to mark a stop colour. */
+  .neu-dot {
+    display: inline-block;
+    width: 0.625rem;
+    height: 0.625rem;
+    border-radius: 999px;
+    box-shadow: inset 1px 1px 2px rgba(0, 0, 0, 0.25), 1px 1px 2px var(--neu-lo);
+  }
+
+  /* Hairline rule that reads as a groove in the surface. */
+  .neu-rule {
+    border: none;
+    height: 2px;
+    background: linear-gradient(to right, transparent, var(--neu-lo), transparent);
+    box-shadow: 0 1px 0 var(--neu-hi);
+  }
+}
