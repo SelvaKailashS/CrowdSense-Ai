@@ -351,6 +351,33 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
     showFlash("warn", `📢 Queue metering directive transmitted to field marshals at ${sName}.`);
   };
 
+  // Constraint-2: Zero-sum fleet reallocation handler
+  const handleReallocateFleet = (donorIndex: number, recipientIndex: number, count: number = 1) => {
+    if (!run) return;
+    const donorName = stops[donorIndex]?.name ?? stopNames[donorIndex] ?? `Stop ${donorIndex + 1}`;
+    const recipientName = stops[recipientIndex]?.name ?? stopNames[recipientIndex] ?? `Stop ${recipientIndex + 1}`;
+
+    setManualReserveExtra((prev) => ({
+      ...prev,
+      [donorIndex]: (prev[donorIndex] ?? 0) - count,
+      [recipientIndex]: (prev[recipientIndex] ?? 0) + count,
+    }));
+
+    const event: EngineEvent = {
+      t: curT,
+      clock: curClock,
+      kind: "dispatch",
+      stopId: stops[recipientIndex]?.id ?? recipientIndex + 1,
+      message: `🔄 CONSTRAINT-2 REALLOCATION: ${count} bus transferred from ${donorName} → ${recipientName}. Trade-off: ${donorName} headway widens +4m; ${recipientName} queue drops by ${count * cap}. Fleet total strictly fixed.`,
+    };
+
+    setManualEvents((prev) => [event, ...prev]);
+    showFlash(
+      "info",
+      `🔄 Constraint-2 Reallocation: ${count} bus shifted from ${donorName} to ${recipientName}. Total fleet invariant maintained.`
+    );
+  };
+
   const handleDispatchAllOvercrowded = () => {
     if (!run || !cur) return;
     let dispatchedAny = false;
@@ -668,10 +695,10 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
             />
           </div>
 
-          {/* AI Live Advisor */}
+          {/* AI Live Advisor (Constraint-2 Enforced) */}
           <AiAdvisor
             context={{
-              festivalName: name || "Festival",
+              festivalName: name || "Festival Operations",
               currentClock: curClock,
               minute: curT,
               threshold,
@@ -685,6 +712,7 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
                   name: n,
                   queue: currentQ,
                   readyBuses: ready,
+                  assignedBuses: run?.buses?.[s] ?? 12,
                   status: currentQ >= threshold ? "ALERT" : currentQ > cap / 2 ? "BEHIND" : "OK",
                 };
               }),
@@ -692,9 +720,11 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
               totalAlerts: totals.alerts,
               reserveUsed: totals.reserveUsed + manualReserveUsed,
               totalReserve: run.reserveBuses,
+              totalFleet: (run.buses ? run.buses.reduce((a, b) => a + b, 0) : 88) + run.reserveBuses,
               rainChance: rain,
               mode: run.mode,
             }}
+            onExecuteTransfer={handleReallocateFleet}
           />
 
           {/* Geographic Fleet & Corridor Transit Map (mapcn) */}
@@ -816,6 +846,32 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
                           📢 Hold Gate
                         </button>
                       </div>
+
+                      {/* Constraint-2: Zero-Sum Fleet Transfer Action */}
+                      {ready > 0 && stopNames.length > 1 && (
+                        <div className="pt-1 space-y-1">
+                          {stopNames.map((targetName, targetIdx) => {
+                            if (targetIdx === s) return null;
+                            const targetBaseQ = cur ? cur.queues[targetIdx] ?? 0 : 0;
+                            const targetDeducted = manualDeductions[targetIdx] ?? 0;
+                            const targetQ = Math.max(0, targetBaseQ - targetDeducted);
+                            if (targetQ <= currentQueue && targetQ < threshold * 0.5) return null;
+
+                            return (
+                              <button
+                                key={`shift-${s}-${targetIdx}`}
+                                type="button"
+                                onClick={() => handleReallocateFleet(s, targetIdx, 1)}
+                                className="w-full py-1.5 px-2 text-[10px] font-semibold rounded-lg text-purple-700 dark:text-purple-300 bg-purple-500/10 hover:bg-purple-500/20 transition-all flex items-center justify-between cursor-pointer border border-purple-500/20"
+                                title={`Constraint-2: Move 1 bus to ${targetName}. Headway here increases by +4m; ${targetName} queue drops by 70.`}
+                              >
+                                <span className="font-bold">🔄 Reallocate 1 Bus → {targetName}</span>
+                                <span className="text-[9px] opacity-80 font-mono">Trade-off: +3.5m wait</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
                   </div>
                 );
