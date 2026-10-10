@@ -222,7 +222,14 @@ export function initMockApi() {
         saveStored(festivals);
       }
 
-      return new Response(JSON.stringify({ run }), {
+      const runPayload = {
+        ...run,
+        mode: (bodyData.mode as Mode) || "festflow",
+        stopNames: fest.stops.map((s) => s.name),
+        stopIds: fest.stops.map((s) => s.id),
+      };
+
+      return new Response(JSON.stringify({ run: runPayload }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });

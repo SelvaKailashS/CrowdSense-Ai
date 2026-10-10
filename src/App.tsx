@@ -10,6 +10,59 @@ import Link, { getEffectiveRoute, navigateTo } from "./shim/next-link";
 // Initialize mock API interception
 initMockApi();
 
+class ErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { hasError: boolean; error: Error | null }
+> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, info: React.ErrorInfo) {
+    console.error("ErrorBoundary caught:", error, info);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="neu-raised p-8 text-center max-w-xl mx-auto my-12">
+          <p className="text-3xl mb-2">⚠️</p>
+          <h2 className="text-xl font-bold font-display text-brick">Control Room Error</h2>
+          <p className="mt-2 text-sm text-ink-soft leading-relaxed">
+            {this.state.error?.message || "An unexpected error occurred while loading telemetry."}
+          </p>
+          <div className="mt-6 flex justify-center gap-3">
+            <button
+              onClick={() => {
+                this.setState({ hasError: false, error: null });
+                window.location.reload();
+              }}
+              className="neu-btn px-4 py-2 text-xs font-bold text-terra cursor-pointer"
+            >
+              ↻ Reload Application
+            </button>
+            <button
+              onClick={() => {
+                this.setState({ hasError: false, error: null });
+                window.location.hash = "/";
+              }}
+              className="neu-btn px-4 py-2 text-xs font-semibold text-ink-soft cursor-pointer"
+            >
+              Go to Overview
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 const STEPS = [
   {
     n: "1",
@@ -299,9 +352,11 @@ export function App() {
           </div>
         )}
 
-        {view === "planner" && <PlannerView festivalId={activeFestivalId} />}
-        {view === "live" && <LiveView festivalId={activeFestivalId} />}
-        {view === "report" && <ReportView festivalId={activeFestivalId} />}
+        <ErrorBoundary>
+          {view === "planner" && <PlannerView festivalId={activeFestivalId} />}
+          {view === "live" && <LiveView festivalId={activeFestivalId} />}
+          {view === "report" && <ReportView festivalId={activeFestivalId} />}
+        </ErrorBoundary>
       </main>
 
       {/* Footer */}

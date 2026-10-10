@@ -98,8 +98,8 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
       setName(j.inputs.name);
       setLastEnd(j.inputs.lastEventEnd);
       setThreshold(j.inputs.crowdThreshold);
-      setStops(j.stops);
-      if (j.stops.length > 0) setCStop(j.stops[0].id);
+      setStops(j.stops || []);
+      if (j.stops && j.stops.length > 0) setCStop(j.stops[0].id);
     } catch (e) {
       console.error("Error loading festival in LiveView", e);
     }
@@ -108,7 +108,7 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
   const loadCounts = useCallback(async () => {
     try {
       const r = await fetch(`/api/festivals/${festivalId}/counts`);
-      if (r.ok) setCounts((await r.json()).counts);
+      if (r.ok) setCounts((await r.json()).counts || []);
     } catch (e) {
       console.error("Error loading counts", e);
     }
@@ -138,24 +138,45 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
           setMsg(j.error ?? "Replay failed");
           return;
         }
-        setRun(j.run);
+
+        // Guarantee stopNames and stopIds are populated
+        const safeRun = j.run
+          ? {
+              ...j.run,
+              stopNames:
+                j.run.stopNames && j.run.stopNames.length > 0
+                  ? j.run.stopNames
+                  : stops.length > 0
+                  ? stops.map((s) => s.name)
+                  : ["Main Gate Terminal", "North Plaza Shuttle", "South Park & Ride"],
+              stopIds:
+                j.run.stopIds && j.run.stopIds.length > 0
+                  ? j.run.stopIds
+                  : stops.length > 0
+                  ? stops.map((s) => s.id)
+                  : [1, 2, 3],
+            }
+          : null;
+
+        setRun(safeRun);
+
         // Default to peak surge on initial load so the control room is active immediately
         setIdx((prev) => {
           if (!hasInitializedIdx) {
             setHasInitializedIdx(true);
-            // Index 9 corresponds to +15 min past headliner (peak exit rush)
-            const peakIdx = j.run?.result?.ticks?.findIndex((t: any) => t.t === 15);
+            const peakIdx = safeRun?.result?.ticks?.findIndex((t: any) => t.t === 15);
             return peakIdx && peakIdx > 0 ? peakIdx : 9;
           }
-          return j.run?.result?.ticks?.length ? Math.min(prev, j.run.result.ticks.length - 1) : 0;
+          return safeRun?.result?.ticks?.length ? Math.min(prev, safeRun.result.ticks.length - 1) : 0;
         });
+
         if (save) setMsg("Saved as the actual night. The post-event report now uses it.");
       } catch (e) {
         setBusy(false);
         console.error("Simulation request failed", e);
       }
     },
-    [festivalId, mode, plannedScenario, actualScenario, rain, shift, drift, hasInitializedIdx],
+    [festivalId, mode, plannedScenario, actualScenario, rain, shift, drift, hasInitializedIdx, stops],
   );
 
   useEffect(() => {
@@ -224,8 +245,15 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
     }
   };
 
+  const stopNames: string[] =
+    run?.stopNames && run.stopNames.length > 0
+      ? run.stopNames
+      : stops.length > 0
+      ? stops.map((s) => s.name)
+      : ["Main Gate Terminal", "North Plaza Shuttle", "South Park & Ride"];
+
   const stopName = (id: number) => stops.find((s) => s.id === id)?.name ?? `Stop ${id}`;
-  const ticks = run?.result.ticks ?? [];
+  const ticks = run?.result?.ticks ?? [];
   const cursor = Math.min(idx, Math.max(0, ticks.length - 1));
   const cur = ticks[cursor];
   const curT = cur ? cur.t : 0;
@@ -236,7 +264,7 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
   const handleManualDispatch = (stopIndex: number) => {
     if (!run) return;
     const stopObj = stops[stopIndex];
-    const sName = stopObj?.name ?? run.stopNames[stopIndex] ?? `Stop ${stopIndex + 1}`;
+    const sName = stopObj?.name ?? stopNames[stopIndex] ?? `Stop ${stopIndex + 1}`;
     const baseQ = cur ? cur.queues[stopIndex] ?? 0 : 0;
     const deducted = manualDeductions[stopIndex] ?? 0;
     const currentQ = Math.max(0, baseQ - deducted);
@@ -281,8 +309,7 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
   const handleDeployReserve = (stopIndex: number) => {
     if (!run) return;
     const stopObj = stops[stopIndex];
-    const sName = stopObj?.name ?? run.stopNames[stopIndex] ?? `Stop ${stopIndex + 1}`;
-    const availableReserve = Math.max(0, (cur?.reserveLeft ?? run.reserveBuses) - manualReserveUsed);
+    const sName = stopObj?.name ?? stopNames[stopIndex] ?? `Stop ${stopIndex + 1}`;
 
     setManualReserveUsed((u) => u + 1);
     setManualReserveExtra((prev) => ({
@@ -305,7 +332,7 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
 
   const handleHoldGate = (stopIndex: number) => {
     const stopObj = stops[stopIndex];
-    const sName = stopObj?.name ?? run?.stopNames[stopIndex] ?? `Stop ${stopIndex + 1}`;
+    const sName = stopObj?.name ?? stopNames[stopIndex] ?? `Stop ${stopIndex + 1}`;
     const event: EngineEvent = {
       t: curT,
       clock: curClock,
@@ -320,7 +347,7 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
   const handleDispatchAllOvercrowded = () => {
     if (!run || !cur) return;
     let dispatchedAny = false;
-    run.stopNames.forEach((_, s) => {
+    stopNames.forEach((_, s) => {
       handleManualDispatch(s);
       dispatchedAny = true;
     });
@@ -343,7 +370,7 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
   const simEvents = run ? run.result.events.filter((e) => e.t <= curT) : [];
   const combinedEvents = [...manualEvents, ...simEvents].slice(0, 50);
   const reforecast = run ? run.result.reforecasts.filter((r) => r.t <= curT).slice(-1)[0] : undefined;
-  const totals = run?.result.totals;
+  const totals = run?.result?.totals;
   const reserveLeft = Math.max(0, (cur?.reserveLeft ?? (run?.reserveBuses ?? 0)) - manualReserveUsed);
 
   return (
@@ -641,7 +668,7 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
               currentClock: curClock,
               minute: curT,
               threshold,
-              stops: run.stopNames.map((n, s) => {
+              stops: stopNames.map((n, s) => {
                 const baseQ = cur ? cur.queues[s] ?? 0 : 0;
                 const deducted = manualDeductions[s] ?? 0;
                 const currentQ = Math.max(0, baseQ - deducted);
@@ -676,7 +703,7 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
             }
           >
             <div className="grid gap-5 md:grid-cols-3">
-              {run.stopNames.map((n, s) => {
+              {stopNames.map((n, s) => {
                 const baseQueue = cur ? cur.queues[s] ?? 0 : 0;
                 const deducted = manualDeductions[s] ?? 0;
                 const currentQueue = Math.max(0, baseQueue - deducted);
@@ -717,7 +744,7 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
                         <div>
                           <dt>Assigned Fleet</dt>
                           <dd className="mt-0.5 font-semibold text-ink">
-                            {run.buses[s]} buses
+                            {run?.buses?.[s] ?? 0} buses
                           </dd>
                         </div>
                         <div>
@@ -854,10 +881,10 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
               className="w-full cursor-pointer"
             />
             <Well className="mt-5">
-              <QueueChart ticks={ticks} stopNames={run.stopNames} threshold={threshold} cursor={cursor} />
+              <QueueChart ticks={ticks} stopNames={stopNames} threshold={threshold} cursor={cursor} />
             </Well>
             <div className="mt-4 flex flex-wrap gap-5 text-xs text-ink-soft">
-              {run.stopNames.map((n, i) => (
+              {stopNames.map((n, i) => (
                 <span key={n} className="inline-flex items-center gap-2">
                   <span className="neu-dot" style={{ background: STOP_COLORS[i % STOP_COLORS.length] }} />
                   {n}
@@ -935,7 +962,7 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
                     <span className={LABEL}>Data Source</span>
                     <select className={`${inputCls} mt-2`} value={cSource} onChange={(e) => setCSource(e.target.value)}>
                       {COUNT_SOURCES.map((s) => (
-                        <option key={s} value={s}>
+                        <option key={s.id} value={s.id}>
                           {s}
                         </option>
                       ))}
