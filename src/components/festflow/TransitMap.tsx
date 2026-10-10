@@ -31,59 +31,59 @@ interface TransitMapProps {
   onDeployReserve: (stopIndex: number) => void;
 }
 
-// Geographic reference coordinates
-const VENUE_COORDS: [number, number] = [-0.1585, 51.5072]; // Main Stage Arena
-const DEPOT_COORDS: [number, number] = [-0.1402, 51.5085]; // Central Reserve Fleet Depot
+// Tamil Nadu, India Geographic reference coordinates (Mallur / Salem District, Tamil Nadu)
+const VENUE_COORDS: [number, number] = [78.1825, 11.5440]; // Sri Mariamman Temple & Festival Grounds, Mallur, TN
+const DEPOT_COORDS: [number, number] = [78.1740, 11.5535]; // TNSTC Fleet Bus Depot, NH 44 Highway, Mallur
 
 const STOP_COORDINATES: [number, number][] = [
-  [-0.1532, 51.5028], // Terminal 1: Main Gate Terminal (South)
-  [-0.1635, 51.5135], // Terminal 2: North Plaza Shuttle (North)
-  [-0.1738, 51.4988], // Terminal 3: South Park & Ride (Orbital)
+  [78.1805, 11.5410], // Terminal 1: Mallur Main Bus Stand (Town Center)
+  [78.1895, 11.5475], // Terminal 2: Temple Road Stop / East Car Street (2 km)
+  [78.1735, 11.5340], // Terminal 3: Sandhai Market Junction / Park & Ride (3.5 km)
 ];
 
-// Transit road arteries connecting Depot to Terminals
+// Transit road arteries connecting Depot to Terminals across Tamil Nadu road network
 const TRANSIT_ROUTES: [number, number][][] = [
-  // Corridor 1: West Park Avenue -> Terminal 1
+  // Corridor 1: NH 44 Highway -> Mallur Main Bus Stand
   [
     DEPOT_COORDS,
-    [-0.1465, 51.5065],
-    [-0.1505, 51.5042],
+    [78.1765, 11.5480],
+    [78.1790, 11.5440],
     STOP_COORDINATES[0],
   ],
-  // Corridor 2: North Radial Expressway -> Terminal 2
+  // Corridor 2: North Bypass -> Temple Car Street Link
   [
     DEPOT_COORDS,
-    [-0.1485, 51.5115],
-    [-0.1565, 51.5130],
+    [78.1810, 11.5520],
+    [78.1860, 11.5495],
     STOP_COORDINATES[1],
   ],
-  // Corridor 3: South Orbital Highway -> Terminal 3
+  // Corridor 3: Salem-Namakkal Highway Corridor -> Market Junction
   [
     DEPOT_COORDS,
-    [-0.1480, 51.5020],
-    [-0.1610, 51.4995],
+    [78.1750, 11.5445],
+    [78.1735, 11.5385],
     STOP_COORDINATES[2],
   ],
 ];
 
-// Traffic choke points / bottlenecks along key corridors
+// Traffic choke points / bottlenecks along key Tamil Nadu corridors
 const TRAFFIC_BOTTLENECK_NODES = [
   {
     id: "traffic-1",
-    name: "Park Avenue & Gate Chokepoint",
-    coords: [-0.1485, 51.5055] as [number, number],
+    name: "NH 44 & Main Bazaar Chokepoint",
+    coords: [78.1770, 11.5460] as [number, number],
     corridorIndex: 0,
   },
   {
     id: "traffic-2",
-    name: "North Ring Road Interchange",
-    coords: [-0.1525, 51.5122] as [number, number],
+    name: "East Car Street & Temple Arch",
+    coords: [78.1850, 11.5485] as [number, number],
     corridorIndex: 1,
   },
   {
     id: "traffic-3",
-    name: "Orbital Overpass Junction",
-    coords: [-0.1545, 51.5008] as [number, number],
+    name: "Sandhai Railway Gate Junction",
+    coords: [78.1740, 11.5370] as [number, number],
     corridorIndex: 2,
   },
 ];
@@ -185,7 +185,7 @@ export function TransitMap({
       <div className="flex items-center justify-between z-10">
         <span className="text-xs font-bold text-ink flex items-center gap-2">
           <span className="h-2.5 w-2.5 rounded-full bg-sage animate-ping" />
-          Real-Time Operations Radar (Safe Telemetry Mode)
+          Real-Time Operations Radar (Tamil Nadu, India)
         </span>
         <span className="text-xs font-mono text-terra font-semibold">
           Active Fleet: {busesOnTrip} | Reserves: {reserveLeft}
@@ -198,13 +198,13 @@ export function TransitMap({
         <circle cx="280" cy="110" r="30" className="fill-terra/20 stroke-terra stroke-2" />
         <circle cx="280" cy="110" r="12" className="fill-terra" />
         <text x="280" y="155" textAnchor="middle" className="text-[11px] fill-current font-bold">
-          {festivalName || "Arena Arena"}
+          {festivalName || "Temple Grounds"}
         </text>
 
         {/* Central Bus Depot */}
         <rect x="420" y="40" width="36" height="36" rx="6" className="fill-stone-800 dark:fill-stone-200" />
         <text x="438" y="90" textAnchor="middle" className="text-[10px] fill-current font-semibold">
-          Bus Depot ({reserveLeft})
+          TNSTC Depot ({reserveLeft})
         </text>
 
         {/* Transit Arteries & Terminals */}
@@ -267,6 +267,9 @@ export function TransitMap({
             <span className="inline-block h-2 w-2 rounded-full bg-sage animate-ping" />
             <span className="text-xs font-bold text-ink">mapcn Real-Time Telemetry</span>
           </div>
+          <span className="neu-chip bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 font-bold text-xs px-2.5 py-1">
+            📍 Tamil Nadu, India
+          </span>
 
           {/* Crowd Areas Filter Toggle */}
           <button
@@ -344,8 +347,8 @@ export function TransitMap({
       <div className="h-[480px] w-full relative">
         <MapErrorBoundary fallback={renderFallbackRadar()}>
           <Map
-            center={[-0.158, 51.506]}
-            zoom={13.6}
+            center={[78.1815, 11.5435]}
+            zoom={13.8}
             blank={blankMode}
             className="h-full w-full"
           >
