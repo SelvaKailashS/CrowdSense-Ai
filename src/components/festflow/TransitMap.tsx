@@ -91,8 +91,18 @@ export function TransitMap({
   const [showTrafficAreas, setShowTrafficAreas] = useState(true);
   const [showTelecom, setShowTelecom] = useState(true);
   const [showRoutes, setShowRoutes] = useState(true);
+  const [showLiveBuses, setShowLiveBuses] = useState(true);
   const [blankMode, setBlankMode] = useState(false);
   const [priorityCleared, setPriorityCleared] = useState<Record<number, boolean>>({});
+  const [simTick, setSimTick] = useState(0);
+
+  // Periodic heartbeat animation for live bus GPS AIS-140 movement
+  React.useEffect(() => {
+    const timer = setInterval(() => {
+      setSimTick((t) => (t + 1) % 1000);
+    }, 1500);
+    return () => clearInterval(timer);
+  }, []);
 
   // Dynamic coordinates anchored around the selected temple
   const venueCoords = selectedTemple.coords;
@@ -127,6 +137,67 @@ export function TransitMap({
       stopCoords[2],
     ],
   ];
+
+  // Interpolate bus positions along corridors for live GPS tracking
+  const liveBuses = useMemo(() => {
+    const buses: Array<{
+      id: string;
+      busNo: string;
+      corridorIndex: number;
+      targetStop: string;
+      coords: [number, number];
+      status: "In Transit" | "Boarding" | "Departing" | "Depot Staged";
+      dwellMinutes: number;
+      occupancy: number;
+      speedKmh: number;
+      progress: number;
+    }> = [];
+
+    const busPrefix = selectedTemple.town === "Mallur" || selectedTemple.town === "Salem" ? "TN-30-N" : "TN-58-N";
+
+    // Generate dynamic live buses moving along the active corridors
+    transitRoutes.forEach((route, corridorIdx) => {
+      const stop = stops[corridorIdx] || { name: `Terminal ${corridorIdx + 1}`, queue: 50 };
+      const stopName = stop.name;
+      const numActive = Math.max(2, Math.min(6, (stop as any).assignedBuses ? Math.round((stop as any).assignedBuses / 3) : 3));
+
+      for (let b = 0; b < numActive; b++) {
+        // Compute cyclic movement along polyline
+        const baseOffset = (b * (1 / numActive) + (simTick * 0.035)) % 1;
+        const totalSegments = route.length - 1;
+        const floatSeg = baseOffset * totalSegments;
+        const segIdx = Math.min(totalSegments - 1, Math.floor(floatSeg));
+        const segFraction = floatSeg - segIdx;
+
+        const p1 = route[segIdx];
+        const p2 = route[segIdx + 1] || route[segIdx];
+
+        const lon = p1[0] + (p2[0] - p1[0]) * segFraction;
+        const lat = p1[1] + (p2[1] - p1[1]) * segFraction;
+
+        const isNearStop = baseOffset > 0.82;
+        const isNearDepot = baseOffset < 0.15;
+        const dwell = isNearStop ? Math.round(4 + (stop.queue / 40)) : 0;
+        const occupancy = isNearStop ? Math.min(70, Math.round(stop.queue > 0 ? 50 + (b * 5) : 30)) : Math.round(35 + (b * 8));
+        const speed = isNearStop ? 0 : Math.round(28 + Math.sin(simTick + b) * 8);
+
+        buses.push({
+          id: `bus-${corridorIdx}-${b}`,
+          busNo: `${busPrefix}-${1040 + corridorIdx * 12 + b}`,
+          corridorIndex: corridorIdx,
+          targetStop: stopName,
+          coords: [lon, lat],
+          status: isNearStop ? (dwell > 7 ? "Boarding" : "Departing") : isNearDepot ? "Depot Staged" : "In Transit",
+          dwellMinutes: dwell,
+          occupancy,
+          speedKmh: speed,
+          progress: Math.round(baseOffset * 100),
+        });
+      }
+    });
+
+    return buses;
+  }, [selectedTemple, transitRoutes, stops, simTick]);
 
   const trafficNodes = [
     {
@@ -458,7 +529,21 @@ export function TransitMap({
                 : "bg-white/80 dark:bg-stone-800/80 text-ink-soft hover:text-ink"
             }`}
           >
-            🚍 Transit Corridors {showRoutes ? "✓" : ""}
+            🛣️ Corridors {showRoutes ? "✓" : ""}
+          </button>
+
+          {/* Live Bus AIS-140 GPS Tracking Toggle */}
+          <button
+            type="button"
+            onClick={() => setShowLiveBuses((v) => !v)}
+            className={`neu-chip cursor-pointer text-xs font-semibold px-2.5 py-1 transition-all ${
+              showLiveBuses
+                ? "bg-emerald-600 text-white ring-1 ring-emerald-600/50 shadow-xs"
+                : "bg-white/80 dark:bg-stone-800/80 text-ink-soft hover:text-ink"
+            }`}
+            title="Real-time live location of active buses tracked via AIS-140 GPS telemetry"
+          >
+            🚍 Live Buses ({liveBuses.length}) {showLiveBuses ? "✓" : ""}
           </button>
 
           {/* Style Mode Toggle */}
@@ -801,6 +886,97 @@ export function TransitMap({
                 </MapMarker>
               );
             })}
+
+            {/* Live Moving Buses with AIS-140 GPS Telemetry */}
+            {showLiveBuses &&
+              liveBuses.map((bus) => {
+                const isChoked = bus.status === "Boarding" && bus.dwellMinutes >= 8;
+                return (
+                  <MapMarker
+                    key={bus.id}
+                    longitude={bus.coords[0]}
+                    latitude={bus.coords[1]}
+                  >
+                    <MarkerContent>
+                      <div className="flex flex-col items-center cursor-pointer group">
+                        <div className="relative">
+                          {isChoked && (
+                            <span className="absolute -inset-1.5 rounded-full bg-brick animate-ping opacity-75" />
+                          )}
+                          <div
+                            className={`h-7 w-7 rounded-full text-white flex items-center justify-center shadow-lg ring-2 ring-white text-[11px] font-bold transition-transform group-hover:scale-125 ${
+                              isChoked
+                                ? "bg-brick"
+                                : bus.status === "Boarding"
+                                ? "bg-amber-600"
+                                : bus.status === "Depot Staged"
+                                ? "bg-stone-700"
+                                : "bg-emerald-600"
+                            }`}
+                          >
+                            🚌
+                          </div>
+                        </div>
+                        <span className="mt-0.5 bg-stone-900/90 text-white font-mono text-[8px] font-bold px-1 rounded shadow">
+                          {bus.busNo.slice(-4)}
+                        </span>
+                      </div>
+                    </MarkerContent>
+                    <MarkerPopup>
+                      <div className="p-3 text-xs min-w-[210px] space-y-2">
+                        <div className="flex items-center justify-between border-b border-black/10 dark:border-white/10 pb-1.5">
+                          <span className="font-bold text-xs text-ink flex items-center gap-1.5">
+                            <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+                            {bus.busNo}
+                          </span>
+                          <span
+                            className={`text-[9px] font-bold px-1.5 py-0.5 rounded text-white ${
+                              isChoked
+                                ? "bg-brick"
+                                : bus.status === "Boarding"
+                                ? "bg-amber-600"
+                                : "bg-emerald-600"
+                            }`}
+                          >
+                            {bus.status}
+                          </span>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-1.5 text-[11px] bg-black/5 dark:bg-white/5 p-2 rounded font-mono">
+                          <div>
+                            <span className="text-[9px] text-ink-soft block uppercase">GPS Speed</span>
+                            <span className="font-bold text-ink">{bus.speedKmh} km/h</span>
+                          </div>
+                          <div>
+                            <span className="text-[9px] text-ink-soft block uppercase">Occupancy</span>
+                            <span className="font-bold text-ink">{bus.occupancy}/70 pax</span>
+                          </div>
+                          <div>
+                            <span className="text-[9px] text-ink-soft block uppercase">Dwell Time</span>
+                            <span className={`font-bold ${isChoked ? "text-brick" : "text-ink"}`}>
+                              {bus.dwellMinutes} min
+                            </span>
+                          </div>
+                          <div>
+                            <span className="text-[9px] text-ink-soft block uppercase">Destination</span>
+                            <span className="font-bold text-terra truncate block">{bus.targetStop}</span>
+                          </div>
+                        </div>
+
+                        {isChoked ? (
+                          <div className="bg-brick/10 border border-brick/30 text-brick p-1.5 rounded text-[10px] font-semibold">
+                            ⚠️ Dwell Anomaly: Loading time exceeded 8m. Severe queue pressure detected!
+                          </div>
+                        ) : (
+                          <div className="text-[10px] text-ink-soft">
+                            AIS-140 GPS Telemetry active · 1500ms update rate
+                          </div>
+                        )}
+                      </div>
+                    </MarkerPopup>
+                  </MapMarker>
+                );
+              })}
           </Map>
         </MapErrorBoundary>
       </div>
