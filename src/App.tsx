@@ -4,8 +4,8 @@ import PlannerView from "./components/festflow/PlannerView";
 import LiveView from "./components/festflow/LiveView";
 import ReportView from "./components/festflow/ReportView";
 import { NewFestival } from "./components/festflow/NewFestival";
-import { Card, Pill, btnGhost } from "./components/festflow/ui";
-import Link from "./shim/next-link";
+import { Card, Pill, btnGhost, btnTone } from "./components/festflow/ui";
+import Link, { getEffectiveRoute, navigateTo } from "./shim/next-link";
 
 // Initialize mock API interception
 initMockApi();
@@ -23,7 +23,7 @@ const STEPS = [
   },
   {
     n: "3",
-    t: "Live Control Room",
+    t: "Control Room & Live Dispatch",
     d: "Per-stop queue tracking, marshal CCTV density, automated rule-based bus release, dynamic re-routing, and instant crowd risk alerts.",
   },
   {
@@ -34,7 +34,7 @@ const STEPS = [
 ];
 
 export function App() {
-  const [route, setRoute] = useState<string>(() => window.location.hash.replace(/^#/, "") || "/");
+  const [route, setRoute] = useState<string>(getEffectiveRoute);
   const [festivalsList, setFestivalsList] = useState<any[]>([]);
   const [isDark, setIsDark] = useState<boolean>(() => {
     try {
@@ -59,11 +59,25 @@ export function App() {
   }, [isDark]);
 
   useEffect(() => {
-    const handleHashChange = () => {
-      setRoute(window.location.hash.replace(/^#/, "") || "/");
+    const handleRoute = (override?: string) => {
+      const current = typeof override === "string" ? override : getEffectiveRoute();
+      setRoute(current);
     };
-    window.addEventListener("hashchange", handleHashChange);
-    return () => window.removeEventListener("hashchange", handleHashChange);
+
+    const handleCustomNav = (e: Event) => {
+      const ce = e as CustomEvent;
+      if (ce.detail) handleRoute(ce.detail);
+    };
+
+    window.addEventListener("hashchange", () => handleRoute());
+    window.addEventListener("popstate", () => handleRoute());
+    window.addEventListener("crowdsense-nav", handleCustomNav);
+
+    return () => {
+      window.removeEventListener("hashchange", () => handleRoute());
+      window.removeEventListener("popstate", () => handleRoute());
+      window.removeEventListener("crowdsense-nav", handleCustomNav);
+    };
   }, []);
 
   const refreshList = async () => {
@@ -82,19 +96,24 @@ export function App() {
     refreshList();
   }, [route]);
 
-  // Route parsing
+  // Robust Route Parsing
   let match;
   let activeFestivalId = 1;
   let view: "home" | "planner" | "live" | "report" = "home";
 
-  if ((match = route.match(/^\/festivals\/(\d+)\/live/))) {
-    activeFestivalId = Number(match[1]);
+  if (
+    (match = route.match(/^\/festivals\/(\d+)\/live/)) ||
+    route === "/live" ||
+    route === "/control-room" ||
+    route === "/live-dispatch"
+  ) {
+    if (match) activeFestivalId = Number(match[1]);
     view = "live";
-  } else if ((match = route.match(/^\/festivals\/(\d+)\/report/))) {
-    activeFestivalId = Number(match[1]);
+  } else if ((match = route.match(/^\/festivals\/(\d+)\/report/)) || route === "/report") {
+    if (match) activeFestivalId = Number(match[1]);
     view = "report";
-  } else if ((match = route.match(/^\/festivals\/(\d+)/))) {
-    activeFestivalId = Number(match[1]);
+  } else if ((match = route.match(/^\/festivals\/(\d+)/)) || route === "/planner") {
+    if (match) activeFestivalId = Number(match[1]);
     view = "planner";
   } else {
     view = "home";
@@ -140,11 +159,12 @@ export function App() {
             </Link>
             <Link
               href={`/festivals/${activeFestivalId}/live`}
-              className={`px-3 py-1.5 text-xs font-semibold uppercase tracking-wider rounded-lg transition-all ${
-                view === "live" ? "neu-inset text-terra" : "text-ink-soft hover:text-ink"
+              className={`px-3.5 py-1.5 text-xs font-semibold uppercase tracking-wider rounded-lg transition-all flex items-center gap-1.5 ${
+                view === "live" ? "neu-inset text-terra font-bold ring-1 ring-terra/30" : "text-ink-soft hover:text-ink"
               }`}
             >
-              Live Dispatch
+              <span className="inline-block h-2 w-2 rounded-full bg-sage animate-pulse" />
+              Control Room · Live Dispatch
             </Link>
             <Link
               href={`/festivals/${activeFestivalId}/report`}
@@ -187,8 +207,20 @@ export function App() {
               {/* 4 Process Steps */}
               <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                 {STEPS.map((s) => (
-                  <div key={s.n} className="neu-inset p-5 transition-transform hover:-translate-y-0.5">
-                    <p className="font-display text-sm italic font-bold text-terra">Stage 0{s.n}</p>
+                  <div
+                    key={s.n}
+                    onClick={() => {
+                      if (s.n === "3") navigateTo(`/festivals/${activeFestivalId}/live`);
+                      else if (s.n === "1" || s.n === "2") navigateTo(`/festivals/${activeFestivalId}`);
+                      else if (s.n === "4") navigateTo(`/festivals/${activeFestivalId}/report`);
+                    }}
+                    className="neu-inset p-5 transition-transform hover:-translate-y-0.5 cursor-pointer group"
+                    title={`Click to open ${s.t}`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <p className="font-display text-sm italic font-bold text-terra">Stage 0{s.n}</p>
+                      <span className="text-xs text-ink-soft group-hover:text-terra">↗</span>
+                    </div>
                     <p className="mt-1.5 text-sm font-bold text-ink">{s.t}</p>
                     <p className="mt-2 text-xs leading-relaxed text-ink-soft">{s.d}</p>
                   </div>
@@ -201,12 +233,12 @@ export function App() {
               <Card
                 title="Active Event Workspaces"
                 className="lg:col-span-2"
-                subtitle="Select an event to calibrate demand scenarios, manage live dispatch, or review operational performance."
+                subtitle="Select an event to calibrate demand scenarios, open live control room dispatch, or review operational performance."
               >
                 {festivalsList.length === 0 ? (
                   <div className="py-8 text-center text-sm text-ink-soft">Loading event directory…</div>
                 ) : (
-                  <ul className="divide-y divide-black/5">
+                  <ul className="divide-y divide-black/5 dark:divide-white/5">
                     {festivalsList.map((f) => (
                       <li key={f.id} className="flex flex-wrap items-center justify-between gap-4 py-5">
                         <div>
@@ -220,12 +252,15 @@ export function App() {
                             {f.town} · Date: {f.eventDate} · Fleet: {f.fleetBuses} Buses Assigned
                           </p>
                         </div>
-                        <div className="flex flex-wrap gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
                           <Link href={`/festivals/${f.id}`} className={btnGhost}>
                             Capacity Planner
                           </Link>
-                          <Link href={`/festivals/${f.id}/live`} className={btnGhost}>
-                            Live Dispatch
+                          <Link
+                            href={`/festivals/${f.id}/live`}
+                            className={`${btnTone("good")} text-xs font-bold shadow-sm`}
+                          >
+                            ⚡ Control Room & Live Dispatch
                           </Link>
                           <Link href={`/festivals/${f.id}/report`} className={btnGhost}>
                             Audit Report

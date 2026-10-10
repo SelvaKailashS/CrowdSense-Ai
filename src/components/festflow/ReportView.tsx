@@ -120,7 +120,7 @@ export default function ReportView({ festivalId }: { festivalId: number }) {
             Open Planner
           </Link>
           <Link href={`/festivals/${festivalId}/live`} className={btnGhost}>
-            Control Room
+            Control Room & Live Dispatch
           </Link>
         </div>
       </header>

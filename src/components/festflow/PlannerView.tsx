@@ -235,7 +235,7 @@ export default function PlannerView({ festivalId }: { festivalId: number }) {
         </div>
         <div className="flex flex-wrap gap-3">
           <Link href={`/festivals/${festivalId}/live`} className={btnGhost}>
-            Control room
+            Control Room & Live Dispatch
           </Link>
           <Link href={`/festivals/${festivalId}/report`} className={btnGhost}>
             Post-event report

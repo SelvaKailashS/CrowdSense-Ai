@@ -1,5 +1,24 @@
 import React from "react";
 
+export function getEffectiveRoute(): string {
+  if (typeof window === "undefined") return "/";
+  const hash = window.location.hash.replace(/^#/, "").trim();
+  if (hash && hash !== "/") return hash;
+  const path = window.location.pathname.trim();
+  if (path && path !== "/") return path;
+  return "/";
+}
+
+export function navigateTo(href: string) {
+  if (typeof window === "undefined") return;
+  if (href.startsWith("/")) {
+    window.location.hash = href;
+    window.dispatchEvent(new CustomEvent("crowdsense-nav", { detail: href }));
+  } else {
+    window.location.href = href;
+  }
+}
+
 export default function Link({
   href,
   children,
@@ -17,12 +36,17 @@ export default function Link({
     if (onClick) onClick(e);
     if (!e.defaultPrevented && typeof href === "string" && href.startsWith("/")) {
       e.preventDefault();
-      window.location.hash = href;
+      navigateTo(href);
     }
   };
 
   return (
-    <a href={href.startsWith("/") ? `#${href}` : href} className={className} onClick={handleClick} {...props}>
+    <a
+      href={href.startsWith("/") ? `#${href}` : href}
+      className={className}
+      onClick={handleClick}
+      {...props}
+    >
       {children}
     </a>
   );

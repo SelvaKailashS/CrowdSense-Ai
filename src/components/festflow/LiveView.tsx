@@ -1,14 +1,14 @@
 "use client";
 
-import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
-import type { EngineResult, EngineEvent, EventKind } from "@/lib/festflow/engine";
+import type { EngineResult, EngineEvent } from "@/lib/festflow/engine";
 import type { Mode, Scenario, StopInput } from "@/lib/festflow/types";
 import { SCENARIOS } from "@/lib/festflow/types";
 import { clockAt, fmtInt } from "@/lib/festflow/math";
 import { QueueChart } from "./charts";
 import { Card, Pill, Stat, STOP_COLORS, Well, btn, btnGhost, btnTone, inputCls, type Tone } from "./ui";
 import { AiAdvisor } from "./AiAdvisor";
+import Link, { navigateTo } from "@/shim/next-link";
 
 interface RunPayload {
   mode: Mode;
@@ -67,7 +67,8 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
   const [shift, setShift] = useState(0);
   const [drift, setDrift] = useState(0);
   const [run, setRun] = useState<RunPayload | null>(null);
-  const [idx, setIdx] = useState(0);
+  const [idx, setIdx] = useState(9); // Default to peak crowd departure (21:45)
+  const [hasInitializedIdx, setHasInitializedIdx] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState<1 | 2 | 4>(1);
   const [busy, setBusy] = useState(false);
@@ -90,50 +91,71 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
   const [flash, setFlash] = useState<FlashNotification | null>(null);
 
   const loadFestival = useCallback(async () => {
-    const r = await fetch(`/api/festivals/${festivalId}`);
-    if (!r.ok) return;
-    const j = await r.json();
-    setName(j.inputs.name);
-    setLastEnd(j.inputs.lastEventEnd);
-    setThreshold(j.inputs.crowdThreshold);
-    setStops(j.stops);
-    if (j.stops.length > 0) setCStop(j.stops[0].id);
+    try {
+      const r = await fetch(`/api/festivals/${festivalId}`);
+      if (!r.ok) return;
+      const j = await r.json();
+      setName(j.inputs.name);
+      setLastEnd(j.inputs.lastEventEnd);
+      setThreshold(j.inputs.crowdThreshold);
+      setStops(j.stops);
+      if (j.stops.length > 0) setCStop(j.stops[0].id);
+    } catch (e) {
+      console.error("Error loading festival in LiveView", e);
+    }
   }, [festivalId]);
 
   const loadCounts = useCallback(async () => {
-    const r = await fetch(`/api/festivals/${festivalId}/counts`);
-    if (r.ok) setCounts((await r.json()).counts);
+    try {
+      const r = await fetch(`/api/festivals/${festivalId}/counts`);
+      if (r.ok) setCounts((await r.json()).counts);
+    } catch (e) {
+      console.error("Error loading counts", e);
+    }
   }, [festivalId]);
 
   const replay = useCallback(
     async (save: boolean) => {
       setBusy(true);
       setMsg(null);
-      const r = await fetch(`/api/festivals/${festivalId}/simulate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          mode,
-          plannedScenario,
-          actualScenario,
-          actualRainChance: rain,
-          actualShiftMin: shift,
-          guidanceDriftPts: drift,
-          save,
-        }),
-      });
-      const j = await r.json();
-      setBusy(false);
-      if (!r.ok) {
-        setMsg(j.error ?? "Replay failed");
-        return;
+      try {
+        const r = await fetch(`/api/festivals/${festivalId}/simulate`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            mode,
+            plannedScenario,
+            actualScenario,
+            actualRainChance: rain,
+            actualShiftMin: shift,
+            guidanceDriftPts: drift,
+            save,
+          }),
+        });
+        const j = await r.json();
+        setBusy(false);
+        if (!r.ok) {
+          setMsg(j.error ?? "Replay failed");
+          return;
+        }
+        setRun(j.run);
+        // Default to peak surge on initial load so the control room is active immediately
+        setIdx((prev) => {
+          if (!hasInitializedIdx) {
+            setHasInitializedIdx(true);
+            // Index 9 corresponds to +15 min past headliner (peak exit rush)
+            const peakIdx = j.run?.result?.ticks?.findIndex((t: any) => t.t === 15);
+            return peakIdx && peakIdx > 0 ? peakIdx : 9;
+          }
+          return j.run?.result?.ticks?.length ? Math.min(prev, j.run.result.ticks.length - 1) : 0;
+        });
+        if (save) setMsg("Saved as the actual night. The post-event report now uses it.");
+      } catch (e) {
+        setBusy(false);
+        console.error("Simulation request failed", e);
       }
-      setRun(j.run);
-      // Constraint-1: Preserve current timeline scrub position without resetting
-      setIdx((prev) => (j.run?.result?.ticks?.length ? Math.min(prev, j.run.result.ticks.length - 1) : 0));
-      if (save) setMsg("Saved as the actual night. The post-event report now uses it.");
     },
-    [festivalId, mode, plannedScenario, actualScenario, rain, shift, drift],
+    [festivalId, mode, plannedScenario, actualScenario, rain, shift, drift, hasInitializedIdx],
   );
 
   useEffect(() => {
@@ -171,58 +193,72 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
 
   const submitCount = async () => {
     setMsg(null);
-    const r = await fetch(`/api/festivals/${festivalId}/counts`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        stopId: cStop,
-        minute: cMinute,
-        waiting: cWaiting,
-        loadFactorPct: cLoad,
-        cctvDensity: cDensity,
-        source: cSource,
-      }),
-    });
-    const j = await r.json();
-    if (!r.ok) {
-      setMsg(j.error ?? "Could not record the count");
-      return;
+    try {
+      const r = await fetch(`/api/festivals/${festivalId}/counts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          stopId: cStop,
+          minute: cMinute,
+          waiting: cWaiting,
+          loadFactorPct: cLoad,
+          cctvDensity: cDensity,
+          source: cSource,
+        }),
+      });
+      const j = await r.json();
+      if (!r.ok) {
+        setMsg(j.error ?? "Could not record the count");
+        return;
+      }
+      setMsg(
+        j.alert
+          ? `Count recorded. ALERT: at or above the ${fmtInt(threshold)} threshold. Ground alert triggered.`
+          : "Ground count recorded successfully.",
+      );
+      showFlash("info", `Ground count recorded for Stop #${cStop}: ${fmtInt(cWaiting)} waiting (${cSource})`);
+      setCWaiting(0);
+      await loadCounts();
+    } catch (e) {
+      console.error(e);
     }
-    setMsg(
-      j.alert
-        ? `Count recorded. ALERT: at or above the ${fmtInt(threshold)} threshold. Ground alert triggered.`
-        : "Ground count recorded successfully.",
-    );
-    showFlash("info", `Ground count recorded for Stop #${cStop}: ${fmtInt(cWaiting)} waiting (${cSource})`);
-    setCWaiting(0);
-    await loadCounts();
   };
 
   const stopName = (id: number) => stops.find((s) => s.id === id)?.name ?? `Stop ${id}`;
   const ticks = run?.result.ticks ?? [];
   const cursor = Math.min(idx, Math.max(0, ticks.length - 1));
   const cur = ticks[cursor];
-  const curT = cur ? cur.t : -30;
-  const curClock = cur ? cur.clock : clockAt(lastEnd, -30);
+  const curT = cur ? cur.t : 0;
+  const curClock = cur ? cur.clock : clockAt(lastEnd, 0);
   const cap = run?.capacity ?? 70;
 
-  // Manual Dispatch Action Handlers
+  // Manual Dispatch Action Handlers (Always Works)
   const handleManualDispatch = (stopIndex: number) => {
-    if (!run || !cur) return;
+    if (!run) return;
     const stopObj = stops[stopIndex];
     const sName = stopObj?.name ?? run.stopNames[stopIndex] ?? `Stop ${stopIndex + 1}`;
-    const baseQ = cur.queues[stopIndex] ?? 0;
+    const baseQ = cur ? cur.queues[stopIndex] ?? 0 : 0;
     const deducted = manualDeductions[stopIndex] ?? 0;
     const currentQ = Math.max(0, baseQ - deducted);
 
+    const busNumber = Math.floor(100 + Math.random() * 899);
+
     if (currentQ <= 0) {
-      showFlash("info", `Platform queue is currently clear at ${sName}. No passengers waiting.`);
+      // Dispatch empty / headway maintenance bus
+      setManualDispatchesCount((c) => c + 1);
+      const event: EngineEvent = {
+        t: curT,
+        clock: curClock,
+        kind: "dispatch",
+        stopId: stopObj?.id ?? stopIndex + 1,
+        message: `⚡ DISPATCH: Fleet Bus #${busNumber} released from ${sName} (Staged at platform for incoming arrivals).`,
+      };
+      setManualEvents((prev) => [event, ...prev]);
+      showFlash("success", `⚡ Bus #${busNumber} dispatched to ${sName} for platform pre-positioning!`);
       return;
     }
 
     const boarded = Math.min(cap, currentQ);
-    const busNumber = Math.floor(100 + Math.random() * 899);
-
     setManualDeductions((prev) => ({
       ...prev,
       [stopIndex]: (prev[stopIndex] ?? 0) + boarded,
@@ -235,23 +271,18 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
       clock: curClock,
       kind: "dispatch",
       stopId: stopObj?.id ?? stopIndex + 1,
-      message: `⚡ MANUAL DISPATCH: Bus #${busNumber} cleared ${fmtInt(boarded)} riders from ${sName} (Operator Override).`,
+      message: `⚡ LIVE DISPATCH: Bus #${busNumber} departed ${sName} clearing ${fmtInt(boarded)} passengers (Operator Release).`,
     };
 
     setManualEvents((prev) => [event, ...prev]);
-    showFlash("success", `⚡ Bus #${busNumber} successfully dispatched from ${sName} with ${fmtInt(boarded)} passengers onboard!`);
+    showFlash("success", `⚡ Bus #${busNumber} cleared ${fmtInt(boarded)} passengers from ${sName}!`);
   };
 
   const handleDeployReserve = (stopIndex: number) => {
-    if (!run || !cur) return;
+    if (!run) return;
     const stopObj = stops[stopIndex];
     const sName = stopObj?.name ?? run.stopNames[stopIndex] ?? `Stop ${stopIndex + 1}`;
-    const availableReserve = Math.max(0, (cur.reserveLeft ?? run.reserveBuses) - manualReserveUsed);
-
-    if (availableReserve <= 0) {
-      showFlash("warn", `Depot reserve fleet exhausted! 0 reserve buses remaining.`);
-      return;
-    }
+    const availableReserve = Math.max(0, (cur?.reserveLeft ?? run.reserveBuses) - manualReserveUsed);
 
     setManualReserveUsed((u) => u + 1);
     setManualReserveExtra((prev) => ({
@@ -265,11 +296,11 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
       clock: curClock,
       kind: "reserve",
       stopId: stopObj?.id ?? stopIndex + 1,
-      message: `🚨 OPERATOR OVERRIDE: Reserve fleet bus ${reserveBusId} deployed from Central Depot to ${sName}. ETA 8 min.`,
+      message: `🚨 OPERATOR OVERRIDE: Reserve bus ${reserveBusId} deployed from Central Depot to ${sName}. ETA 8 min.`,
     };
 
     setManualEvents((prev) => [event, ...prev]);
-    showFlash("info", `🚨 Reserve Bus ${reserveBusId} deployed to ${sName}! Arriving in 8 minutes.`);
+    showFlash("info", `🚨 Reserve Bus ${reserveBusId} dispatched to ${sName}! Arriving in 8 minutes.`);
   };
 
   const handleHoldGate = (stopIndex: number) => {
@@ -290,16 +321,21 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
     if (!run || !cur) return;
     let dispatchedAny = false;
     run.stopNames.forEach((_, s) => {
-      const baseQ = cur.queues[s] ?? 0;
-      const deducted = manualDeductions[s] ?? 0;
-      const currentQ = Math.max(0, baseQ - deducted);
-      if (currentQ >= 150) {
-        handleManualDispatch(s);
-        dispatchedAny = true;
-      }
+      handleManualDispatch(s);
+      dispatchedAny = true;
     });
-    if (!dispatchedAny) {
-      showFlash("info", "No stops currently exceed the surge threshold (150+ riders).");
+    if (dispatchedAny) {
+      showFlash("success", "⚡ Rapid fleet dispatch initiated across all terminals!");
+    }
+  };
+
+  // Jump to specific time periods
+  const jumpToMinute = (targetMinute: number) => {
+    if (!ticks.length) return;
+    const targetIdx = ticks.findIndex((t) => t.t >= targetMinute);
+    if (targetIdx >= 0) {
+      setPlaying(false);
+      setIdx(targetIdx);
     }
   };
 
@@ -329,7 +365,7 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
           <p className="text-sm font-semibold tracking-wide">{flash.message}</p>
           <button
             onClick={() => setFlash(null)}
-            className="ml-2 text-xs font-bold opacity-75 hover:opacity-100"
+            className="ml-2 text-xs font-bold opacity-75 hover:opacity-100 cursor-pointer"
             aria-label="Close notification"
           >
             ✕
@@ -343,10 +379,10 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
           <div className="flex items-center gap-2">
             <span className="inline-block h-2.5 w-2.5 rounded-full bg-sage animate-ping" />
             <p className="text-xs font-semibold uppercase tracking-[0.2em] text-terra">
-              Live Dispatch Console · Event Night Control Room
+              Control Room · Live Dispatch Console
             </p>
           </div>
-          <h1 className="mt-2 font-display text-3xl font-bold text-ink">{name || "Festival"}</h1>
+          <h1 className="mt-2 font-display text-3xl font-bold text-ink">{name || "Festival Operations"}</h1>
           <p className="mt-1.5 text-sm text-ink-soft">
             Real-time terminal queues, autonomous & manual bus dispatches, reserve fleet management, and dynamic AI outflow forecasting.
           </p>
@@ -354,9 +390,9 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
         <div className="flex flex-wrap items-center gap-3">
           <button
             onClick={handleDispatchAllOvercrowded}
-            className={`${btnTone("warn")} text-xs font-bold shadow-md`}
+            className={`${btnTone("good")} text-xs font-bold shadow-md cursor-pointer`}
           >
-            ⚡ Emergency Dispatch All High Stops
+            ⚡ Dispatch All Terminals Now
           </button>
           <Link href={`/festivals/${festivalId}`} className={btnGhost}>
             Capacity Planner
@@ -366,6 +402,53 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
           </Link>
         </div>
       </header>
+
+      {/* Quick Time Jump Shortcuts */}
+      <div className="neu-inset p-3.5 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs font-semibold text-ink-soft mr-1">Time Jump Presets:</span>
+          <button
+            type="button"
+            onClick={() => jumpToMinute(-30)}
+            className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+              curT === -30 ? "neu-inset text-terra font-bold" : "neu-flat text-ink-soft hover:text-ink"
+            }`}
+          >
+            🚌 Pre-Event Staging (21:00)
+          </button>
+          <button
+            type="button"
+            onClick={() => jumpToMinute(0)}
+            className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+              curT === 0 ? "neu-inset text-terra font-bold" : "neu-flat text-ink-soft hover:text-ink"
+            }`}
+          >
+            ⏱️ Event Close (21:30)
+          </button>
+          <button
+            type="button"
+            onClick={() => jumpToMinute(15)}
+            className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+              curT >= 10 && curT <= 25 ? "neu-inset text-terra font-bold ring-1 ring-terra" : "neu-flat text-ink-soft hover:text-ink"
+            }`}
+          >
+            🔥 Peak Crowd Surge (21:45)
+          </button>
+          <button
+            type="button"
+            onClick={() => jumpToMinute(45)}
+            className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+              curT >= 40 ? "neu-inset text-terra font-bold" : "neu-flat text-ink-soft hover:text-ink"
+            }`}
+          >
+            🌙 Late Evacuation (22:15)
+          </button>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-ink-soft">Active Clock:</span>
+          <span className="neu-chip font-mono text-xs font-bold text-terra px-2.5 py-1">{curClock}</span>
+        </div>
+      </div>
 
       {/* Ground Conditions & Reactive Incidents */}
       <Card
@@ -580,7 +663,7 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
             }}
           />
 
-          {/* Live Dispatch Command Cards (One per stop) */}
+          {/* Live Dispatch Command Stations (Per Terminal) */}
           <Card
             title="Terminal Dispatch Stations"
             subtitle="Trigger immediate bus departures, assign emergency reserve vehicles, or alert ground marshals per stop."
@@ -644,31 +727,21 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
                       </dl>
                     </div>
 
-                    {/* Live Dispatch Action Buttons */}
+                    {/* Live Dispatch Action Buttons (Always Interactive) */}
                     <div className="mt-5 space-y-2 border-t border-black/5 dark:border-white/5 pt-4">
                       <button
                         type="button"
                         onClick={() => handleManualDispatch(s)}
-                        disabled={currentQueue <= 0}
-                        className={`w-full py-2 px-3 text-xs font-bold rounded-lg transition-all flex items-center justify-center gap-1.5 ${
-                          currentQueue > 0
-                            ? "bg-sage text-white hover:brightness-110 shadow cursor-pointer"
-                            : "opacity-40 cursor-not-allowed bg-black/10 dark:bg-white/10 text-ink-soft"
-                        }`}
+                        className="w-full py-2.5 px-3 text-xs font-bold rounded-lg transition-all flex items-center justify-center gap-1.5 bg-sage text-white hover:brightness-110 shadow cursor-pointer active:scale-[0.98]"
                       >
-                        <span>⚡</span> Dispatch Bus Now ({Math.min(cap, currentQueue)} riders)
+                        <span>⚡</span> Dispatch Bus Now {currentQueue > 0 ? `(${Math.min(cap, currentQueue)} riders)` : "(Staging)"}
                       </button>
 
                       <div className="grid grid-cols-2 gap-2">
                         <button
                           type="button"
                           onClick={() => handleDeployReserve(s)}
-                          disabled={reserveLeft <= 0}
-                          className={`py-1.5 px-2 text-[11px] font-semibold rounded-lg transition-all ${
-                            reserveLeft > 0
-                              ? "neu-btn text-ochre hover:text-ink cursor-pointer"
-                              : "opacity-40 cursor-not-allowed text-ink-soft"
-                          }`}
+                          className="neu-btn py-2 px-2 text-[11px] font-semibold text-ochre hover:text-ink cursor-pointer active:scale-[0.98]"
                           title="Deploy 1 bus from reserve depot"
                         >
                           🚨 Deploy Reserve
@@ -676,7 +749,7 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
                         <button
                           type="button"
                           onClick={() => handleHoldGate(s)}
-                          className="neu-btn py-1.5 px-2 text-[11px] font-semibold text-ink-soft hover:text-ink cursor-pointer"
+                          className="neu-btn py-2 px-2 text-[11px] font-semibold text-ink-soft hover:text-ink cursor-pointer active:scale-[0.98]"
                           title="Alert marshals to pause gate entry"
                         >
                           📢 Hold Gate
@@ -748,7 +821,7 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
                     <button
                       key={s}
                       onClick={() => setSpeed(s)}
-                      className={`px-2 py-1 text-xs font-bold rounded ${
+                      className={`px-2 py-1 text-xs font-bold rounded cursor-pointer ${
                         speed === s ? "neu-inset text-terra" : "neu-flat text-ink-soft hover:text-ink"
                       }`}
                     >
@@ -778,7 +851,7 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
                 setPlaying(false);
                 setIdx(Number(e.target.value));
               }}
-              className="w-full"
+              className="w-full cursor-pointer"
             />
             <Well className="mt-5">
               <QueueChart ticks={ticks} stopNames={run.stopNames} threshold={threshold} cursor={cursor} />
@@ -869,7 +942,7 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
                     </select>
                   </label>
                 </div>
-                <button onClick={submitCount} className={`${btn} mt-5 w-full`}>
+                <button onClick={submitCount} className={`${btn} mt-5 w-full cursor-pointer`}>
                   Record Ground Count
                 </button>
               </Card>
