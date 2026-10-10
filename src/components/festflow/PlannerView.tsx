@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { Fragment, useCallback, useEffect, useState } from "react";
 import { SCENARIOS, type FestivalInputs, type Interventions, type Scenario, type StopInput } from "@/lib/festflow/types";
-import type { CellStatus, DispatchRow, PlanReport, ScenarioSummary } from "@/lib/festflow/plan";
+import { buildPlanReport, scenarioSummary, type CellStatus, type DispatchRow, type PlanReport, type ScenarioSummary } from "@/lib/festflow/plan";
 import { fmtInt } from "@/lib/festflow/math";
 import { ForecastChart } from "./charts";
 import { Card, Pill, Stat, STATUS_TONE, STOP_COLORS, Well, btn, btnGhost, btnTone, inputCls } from "./ui";
@@ -98,9 +98,43 @@ export default function PlannerView({ festivalId }: { festivalId: number }) {
     loadFestival();
   }, [loadFestival]);
 
+  // Instantly recalculate plan and predictions on every keystroke
   useEffect(() => {
-    loadPlan(scenario);
-  }, [loadPlan, scenario]);
+    if (inputs && stops.length > 0) {
+      try {
+        const report = buildPlanReport(inputs, stops, scenario);
+        const forecasts: Record<Scenario, ScenarioSummary> = {} as any;
+        for (const sc of SCENARIOS) {
+          forecasts[sc] = scenarioSummary(inputs, stops, sc);
+        }
+        setData((prev) => ({
+          id: festivalId,
+          status: prev?.status ?? "planning",
+          inputs,
+          stops,
+          scenario,
+          forecasts,
+          report,
+          approved: prev?.approved ?? [],
+        }));
+      } catch (err) {
+        console.error("Instant plan recalculation error:", err);
+      }
+    }
+  }, [inputs, stops, scenario, festivalId]);
+
+  // Debounced auto-save so edits are seamlessly persisted to storage
+  useEffect(() => {
+    if (!dirty || !inputs || stops.length === 0) return;
+    const timer = setTimeout(() => {
+      fetch(`/api/festivals/${festivalId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ inputs, stops }),
+      }).catch((e) => console.error("Auto-save failed", e));
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [inputs, stops, dirty, festivalId]);
 
   const setField = (key: FieldDef["key"], value: string | number) => {
     setInputs((prev) => (prev ? ({ ...prev, [key]: value } as FestivalInputs) : prev));
@@ -614,9 +648,12 @@ export default function PlannerView({ festivalId }: { festivalId: number }) {
           </div>
 
           <div className="mt-8 flex flex-wrap items-center gap-4">
-            <button onClick={save} disabled={busy || !dirty} className={btn}>
-              {dirty ? "Save and recalculate" : "Saved"}
+            <button onClick={save} disabled={busy} className={btn}>
+              {busy ? "Saving…" : dirty ? "Save changes" : "Saved ✓"}
             </button>
+            <span className="text-xs text-sage font-medium">
+              ⚡ Recalculates predictions & fleet dynamically on change
+            </span>
             {msg && <span className="text-sm text-ink-soft">{msg}</span>}
           </div>
         </details>

@@ -280,7 +280,7 @@ export function initMockApi() {
         });
       }
 
-      if (method === "PATCH") {
+      if (method === "PATCH" || method === "PUT") {
         if (bodyData.inputs) fest.inputs = { ...fest.inputs, ...bodyData.inputs };
         if (bodyData.stops) fest.stops = bodyData.stops;
         fest.name = fest.inputs.name;
@@ -288,7 +288,7 @@ export function initMockApi() {
         fest.fleetBuses = fest.inputs.fleetBuses;
         fest.eventDate = fest.inputs.eventDate;
         saveStored(festivals);
-        return new Response(JSON.stringify({ ok: true }), {
+        return new Response(JSON.stringify({ ok: true, inputs: fest.inputs, stops: fest.stops }), {
           status: 200,
           headers: { "Content-Type": "application/json" },
         });
