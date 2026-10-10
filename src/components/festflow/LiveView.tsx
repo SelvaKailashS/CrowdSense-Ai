@@ -324,6 +324,12 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
         {msg && <p className="mt-4 text-sm text-sage font-medium">{msg}</p>}
       </Card>
 
+      {!run && (
+        <div className="neu-raised p-8 text-center text-ink-soft">
+          <p className="font-display text-base">Initializing live telemetry & queue simulation…</p>
+        </div>
+      )}
+
       {run && totals && (
         <>
           <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-6">
@@ -363,7 +369,7 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
             context={{
               festivalName: name || "Festival",
               currentClock: curClock,
-              minute: curMinute,
+              minute: curT,
               threshold,
               stops: run.stopNames.map((n, s) => ({
                 name: n,
