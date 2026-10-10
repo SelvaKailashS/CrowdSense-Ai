@@ -8,6 +8,7 @@ import { clockAt, fmtInt } from "@/lib/festflow/math";
 import { QueueChart } from "./charts";
 import { Card, Pill, Stat, STOP_COLORS, Well, btn, btnGhost, btnTone, inputCls, type Tone } from "./ui";
 import { AiAdvisor } from "./AiAdvisor";
+import { TransitMap } from "./TransitMap";
 import Link, { navigateTo } from "@/shim/next-link";
 
 interface RunPayload {
@@ -688,6 +689,33 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
               rainChance: rain,
               mode: run.mode,
             }}
+          />
+
+          {/* Geographic Fleet & Corridor Transit Map (mapcn) */}
+          <TransitMap
+            festivalName={festival?.name ?? "Metropolis Music Festival"}
+            stops={stopNames.map((n, s) => {
+              const baseQueue = cur ? cur.queues[s] ?? 0 : 0;
+              const deducted = manualDeductions[s] ?? 0;
+              const currentQueue = Math.max(0, baseQueue - deducted);
+              const extraReady = manualReserveExtra[s] ?? 0;
+              const ready = (cur ? cur.ready[s] ?? 0 : 0) + extraReady;
+              const status: "ALERT" | "BEHIND" | "OK" =
+                currentQueue >= threshold ? "ALERT" : currentQueue > cap / 2 ? "BEHIND" : "OK";
+              return {
+                id: s,
+                name: n,
+                queue: currentQueue,
+                readyBuses: ready,
+                assignedBuses: run?.buses?.[s] ?? 0,
+                status,
+              };
+            })}
+            threshold={threshold}
+            reserveLeft={reserveLeft}
+            busesOnTrip={cur?.onTrip ?? 0}
+            onDispatch={handleManualDispatch}
+            onDeployReserve={handleDeployReserve}
           />
 
           {/* Live Dispatch Command Stations (Per Terminal) */}
