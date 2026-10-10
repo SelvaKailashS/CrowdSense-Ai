@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
-import type { EngineResult } from "@/lib/festflow/engine";
+import type { EngineResult, EngineEvent, EventKind } from "@/lib/festflow/engine";
 import type { Mode, Scenario, StopInput } from "@/lib/festflow/types";
 import { SCENARIOS } from "@/lib/festflow/types";
 import { clockAt, fmtInt } from "@/lib/festflow/math";
@@ -36,6 +36,12 @@ interface CountRow {
   createdAt: string;
 }
 
+interface FlashNotification {
+  type: "success" | "warn" | "info";
+  message: string;
+  id: number;
+}
+
 const EVENT_TONE: Record<string, Tone> = {
   alert: "bad",
   reserve: "info",
@@ -63,6 +69,7 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
   const [run, setRun] = useState<RunPayload | null>(null);
   const [idx, setIdx] = useState(0);
   const [playing, setPlaying] = useState(false);
+  const [speed, setSpeed] = useState<1 | 2 | 4>(1);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [counts, setCounts] = useState<CountRow[]>([]);
@@ -72,6 +79,15 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
   const [cLoad, setCLoad] = useState(80);
   const [cDensity, setCDensity] = useState(2);
   const [cSource, setCSource] = useState(COUNT_SOURCES[0]);
+
+  // Live Manual Dispatch Overrides
+  const [manualDeductions, setManualDeductions] = useState<Record<number, number>>({});
+  const [manualReserveExtra, setManualReserveExtra] = useState<Record<number, number>>({});
+  const [manualReserveUsed, setManualReserveUsed] = useState(0);
+  const [manualDispatchesCount, setManualDispatchesCount] = useState(0);
+  const [manualBoardedCount, setManualBoardedCount] = useState(0);
+  const [manualEvents, setManualEvents] = useState<EngineEvent[]>([]);
+  const [flash, setFlash] = useState<FlashNotification | null>(null);
 
   const loadFestival = useCallback(async () => {
     const r = await fetch(`/api/festivals/${festivalId}`);
@@ -130,15 +146,28 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
     replay(false);
   }, [replay]);
 
+  // Timeline playback loop with speed multiplier and boundary protection
   useEffect(() => {
     if (!playing || !run) return;
-    const h = window.setInterval(() => setIdx((i) => Math.min(i + 1, run.result.ticks.length - 1)), 280);
+    const intervalMs = Math.round(280 / speed);
+    const h = window.setInterval(() => {
+      setIdx((i) => {
+        if (i >= run.result.ticks.length - 1) {
+          setPlaying(false);
+          return i;
+        }
+        return i + 1;
+      });
+    }, intervalMs);
     return () => window.clearInterval(h);
-  }, [playing, run]);
+  }, [playing, run, speed]);
 
-  useEffect(() => {
-    if (run && idx >= run.result.ticks.length - 1) setPlaying(false);
-  }, [idx, run]);
+  const showFlash = (type: "success" | "warn" | "info", message: string) => {
+    setFlash({ type, message, id: Date.now() });
+    setTimeout(() => {
+      setFlash((f) => (f && Date.now() - f.id >= 4500 ? null : f));
+    }, 5000);
+  };
 
   const submitCount = async () => {
     setMsg(null);
@@ -161,9 +190,10 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
     }
     setMsg(
       j.alert
-        ? `Count recorded. ALERT: at or above the ${fmtInt(threshold)} threshold. Notify police and marshals.`
-        : "Count recorded.",
+        ? `Count recorded. ALERT: at or above the ${fmtInt(threshold)} threshold. Ground alert triggered.`
+        : "Ground count recorded successfully.",
     );
+    showFlash("info", `Ground count recorded for Stop #${cStop}: ${fmtInt(cWaiting)} waiting (${cSource})`);
     setCWaiting(0);
     await loadCounts();
   };
@@ -174,35 +204,173 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
   const cur = ticks[cursor];
   const curT = cur ? cur.t : -30;
   const curClock = cur ? cur.clock : clockAt(lastEnd, -30);
-  const events = run ? run.result.events.filter((e) => e.t <= curT) : [];
-  const recentEvents = events.slice(-40).reverse();
+  const cap = run?.capacity ?? 70;
+
+  // Manual Dispatch Action Handlers
+  const handleManualDispatch = (stopIndex: number) => {
+    if (!run || !cur) return;
+    const stopObj = stops[stopIndex];
+    const sName = stopObj?.name ?? run.stopNames[stopIndex] ?? `Stop ${stopIndex + 1}`;
+    const baseQ = cur.queues[stopIndex] ?? 0;
+    const deducted = manualDeductions[stopIndex] ?? 0;
+    const currentQ = Math.max(0, baseQ - deducted);
+
+    if (currentQ <= 0) {
+      showFlash("info", `Platform queue is currently clear at ${sName}. No passengers waiting.`);
+      return;
+    }
+
+    const boarded = Math.min(cap, currentQ);
+    const busNumber = Math.floor(100 + Math.random() * 899);
+
+    setManualDeductions((prev) => ({
+      ...prev,
+      [stopIndex]: (prev[stopIndex] ?? 0) + boarded,
+    }));
+    setManualDispatchesCount((c) => c + 1);
+    setManualBoardedCount((b) => b + boarded);
+
+    const event: EngineEvent = {
+      t: curT,
+      clock: curClock,
+      kind: "dispatch",
+      stopId: stopObj?.id ?? stopIndex + 1,
+      message: `⚡ MANUAL DISPATCH: Bus #${busNumber} cleared ${fmtInt(boarded)} riders from ${sName} (Operator Override).`,
+    };
+
+    setManualEvents((prev) => [event, ...prev]);
+    showFlash("success", `⚡ Bus #${busNumber} successfully dispatched from ${sName} with ${fmtInt(boarded)} passengers onboard!`);
+  };
+
+  const handleDeployReserve = (stopIndex: number) => {
+    if (!run || !cur) return;
+    const stopObj = stops[stopIndex];
+    const sName = stopObj?.name ?? run.stopNames[stopIndex] ?? `Stop ${stopIndex + 1}`;
+    const availableReserve = Math.max(0, (cur.reserveLeft ?? run.reserveBuses) - manualReserveUsed);
+
+    if (availableReserve <= 0) {
+      showFlash("warn", `Depot reserve fleet exhausted! 0 reserve buses remaining.`);
+      return;
+    }
+
+    setManualReserveUsed((u) => u + 1);
+    setManualReserveExtra((prev) => ({
+      ...prev,
+      [stopIndex]: (prev[stopIndex] ?? 0) + 1,
+    }));
+
+    const reserveBusId = `RES-${Math.floor(10 + Math.random() * 90)}`;
+    const event: EngineEvent = {
+      t: curT,
+      clock: curClock,
+      kind: "reserve",
+      stopId: stopObj?.id ?? stopIndex + 1,
+      message: `🚨 OPERATOR OVERRIDE: Reserve fleet bus ${reserveBusId} deployed from Central Depot to ${sName}. ETA 8 min.`,
+    };
+
+    setManualEvents((prev) => [event, ...prev]);
+    showFlash("info", `🚨 Reserve Bus ${reserveBusId} deployed to ${sName}! Arriving in 8 minutes.`);
+  };
+
+  const handleHoldGate = (stopIndex: number) => {
+    const stopObj = stops[stopIndex];
+    const sName = stopObj?.name ?? run?.stopNames[stopIndex] ?? `Stop ${stopIndex + 1}`;
+    const event: EngineEvent = {
+      t: curT,
+      clock: curClock,
+      kind: "alert",
+      stopId: stopObj?.id ?? stopIndex + 1,
+      message: `📢 MARSHAL DIRECTIVE: Queue hold active at ${sName} entrance gates to meter platform density.`,
+    };
+    setManualEvents((prev) => [event, ...prev]);
+    showFlash("warn", `📢 Queue metering directive transmitted to field marshals at ${sName}.`);
+  };
+
+  const handleDispatchAllOvercrowded = () => {
+    if (!run || !cur) return;
+    let dispatchedAny = false;
+    run.stopNames.forEach((_, s) => {
+      const baseQ = cur.queues[s] ?? 0;
+      const deducted = manualDeductions[s] ?? 0;
+      const currentQ = Math.max(0, baseQ - deducted);
+      if (currentQ >= 150) {
+        handleManualDispatch(s);
+        dispatchedAny = true;
+      }
+    });
+    if (!dispatchedAny) {
+      showFlash("info", "No stops currently exceed the surge threshold (150+ riders).");
+    }
+  };
+
+  // Combine events: engine timeline events up to curT + manual interventions
+  const simEvents = run ? run.result.events.filter((e) => e.t <= curT) : [];
+  const combinedEvents = [...manualEvents, ...simEvents].slice(0, 50);
   const reforecast = run ? run.result.reforecasts.filter((r) => r.t <= curT).slice(-1)[0] : undefined;
   const totals = run?.result.totals;
-  const cap = run?.capacity ?? 70;
+  const reserveLeft = Math.max(0, (cur?.reserveLeft ?? (run?.reserveBuses ?? 0)) - manualReserveUsed);
 
   return (
     <div className="space-y-6">
+      {/* Toast Flash Notification */}
+      {flash && (
+        <div
+          className={`fixed bottom-6 right-6 z-50 flex items-center gap-3 rounded-xl px-5 py-3.5 shadow-2xl transition-all duration-300 ${
+            flash.type === "success"
+              ? "bg-sage/95 text-white ring-1 ring-white/20"
+              : flash.type === "warn"
+              ? "bg-terra/95 text-white ring-1 ring-white/20"
+              : "bg-ink/95 text-sand ring-1 ring-white/20"
+          }`}
+        >
+          <span className="text-base">
+            {flash.type === "success" ? "⚡" : flash.type === "warn" ? "🚨" : "ℹ️"}
+          </span>
+          <p className="text-sm font-semibold tracking-wide">{flash.message}</p>
+          <button
+            onClick={() => setFlash(null)}
+            className="ml-2 text-xs font-bold opacity-75 hover:opacity-100"
+            aria-label="Close notification"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {/* Main Control Room Header */}
       <header className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-brick">Control room · event night</p>
-          <h1 className="mt-2 font-display text-3xl text-ink">{name || "Festival"}</h1>
-          <p className="mt-2 text-sm text-ink-soft">
-            Live queues by stop, dispatch and reserve decisions, crowd alerts, and 15-minute re-forecast from counts.
+          <div className="flex items-center gap-2">
+            <span className="inline-block h-2.5 w-2.5 rounded-full bg-sage animate-ping" />
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-terra">
+              Live Dispatch Console · Event Night Control Room
+            </p>
+          </div>
+          <h1 className="mt-2 font-display text-3xl font-bold text-ink">{name || "Festival"}</h1>
+          <p className="mt-1.5 text-sm text-ink-soft">
+            Real-time terminal queues, autonomous & manual bus dispatches, reserve fleet management, and dynamic AI outflow forecasting.
           </p>
         </div>
-        <div className="flex gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            onClick={handleDispatchAllOvercrowded}
+            className={`${btnTone("warn")} text-xs font-bold shadow-md`}
+          >
+            ⚡ Emergency Dispatch All High Stops
+          </button>
           <Link href={`/festivals/${festivalId}`} className={btnGhost}>
-            Planner
+            Capacity Planner
           </Link>
           <Link href={`/festivals/${festivalId}/report`} className={btnGhost}>
-            Report
+            Audit Report
           </Link>
         </div>
       </header>
 
+      {/* Ground Conditions & Reactive Incidents */}
       <Card
         title="Live Ground Conditions & Incident Controls"
-        subtitle="Real-time changes to rain, event lateness, or crowd surges automatically recalculate all queue predictions, timelines, and AI recommendations."
+        subtitle="Live changes to weather, concert delays, or crowd surges automatically recalculate all queue forecasts, fleet cycles, and AI advice."
         right={
           <span className="neu-chip text-sage flex items-center gap-1.5">
             <span className="inline-block h-2 w-2 rounded-full bg-sage animate-pulse" />
@@ -212,14 +380,14 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
       >
         <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
           <label className="block">
-            <span className={LABEL}>Dispatch method</span>
+            <span className={LABEL}>Dispatch Mode</span>
             <select className={`${inputCls} mt-2`} value={mode} onChange={(e) => setMode(e.target.value as Mode)}>
-              <option value="festflow">FestFlow rules and reserve</option>
-              <option value="legacy">Last year: phone dispatch, fixed placement</option>
+              <option value="festflow">FestFlow Autonomous AI & Reserve</option>
+              <option value="legacy">Legacy Mode (Telephone dispatch, static staging)</option>
             </select>
           </label>
           <label className="block">
-            <span className={LABEL}>Planned scenario</span>
+            <span className={LABEL}>Planned Demand Scenario</span>
             <select className={`${inputCls} mt-2`} value={plannedScenario} onChange={(e) => setPlannedScenario(e.target.value as Scenario)}>
               {SCENARIOS.map((s) => (
                 <option key={s} value={s}>
@@ -229,7 +397,7 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
             </select>
           </label>
           <label className="block">
-            <span className={LABEL}>Actual crowd</span>
+            <span className={LABEL}>Actual Ground Crowd Surge</span>
             <select className={`${inputCls} mt-2`} value={actualScenario} onChange={(e) => setActualScenario(e.target.value as Scenario)}>
               {SCENARIOS.map((s) => (
                 <option key={s} value={s}>
@@ -264,18 +432,34 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
             <span className="mt-1.5 block text-[11px] text-ink-soft">e.g. +30 = headliner runs 30 min late</span>
           </label>
           <label className="block">
-            <span className={LABEL}>Crowd ignores guidance (pts to main stand)</span>
+            <span className={LABEL}>Crowd Guidance Drift (pts)</span>
             <input className={`${inputCls} mt-2`} type="number" min={0} max={40} step={1} value={drift} onChange={(e) => setDrift(Number(e.target.value))} />
-            <span className="mt-1.5 block text-[11px] text-ink-soft">Crowd drift off peripheral terminals</span>
+            <span className="mt-1.5 block text-[11px] text-ink-soft">Riders drifting toward central terminal</span>
           </label>
           <div className="flex flex-wrap items-end gap-3 sm:col-span-2">
             <button onClick={() => replay(true)} disabled={busy} className={btnGhost}>
               {busy ? "Saving…" : "Save as actual night (for Audit Report)"}
             </button>
+            {(manualDispatchesCount > 0 || manualReserveUsed > 0) && (
+              <button
+                onClick={() => {
+                  setManualDeductions({});
+                  setManualReserveExtra({});
+                  setManualReserveUsed(0);
+                  setManualDispatchesCount(0);
+                  setManualBoardedCount(0);
+                  setManualEvents([]);
+                  showFlash("info", "Manual dispatch overrides cleared.");
+                }}
+                className={`${btnGhost} text-xs`}
+              >
+                Reset Manual Actions ({manualDispatchesCount} Dispatched)
+              </button>
+            )}
           </div>
         </div>
 
-        {/* Live Incident Trigger Presets (Constraint-1) */}
+        {/* Live Incident Presets */}
         <div className="mt-5 flex flex-wrap items-center gap-2 pt-4 border-t border-black/5 dark:border-white/5">
           <span className="text-[11px] font-semibold uppercase tracking-wider text-ink-soft mr-1">
             Simulate Live Incidents:
@@ -332,6 +516,7 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
 
       {run && totals && (
         <>
+          {/* Key Metric Stats */}
           <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-6">
             <Stat
               label="Peak queue, one stop"
@@ -347,15 +532,16 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
               tone={totals.strandedPct > 2 ? "bad" : "good"}
             />
             <Stat
-              label="Sent by rule"
-              value={`${totals.rulePct}%`}
-              sub={`${totals.dispatches} buses dispatched`}
-              tone={totals.rulePct > 90 ? "good" : "warn"}
+              label="Total Dispatches"
+              value={`${totals.dispatches + manualDispatchesCount}`}
+              sub={`${manualDispatchesCount} manual operator dispatches`}
+              tone="good"
             />
             <Stat
-              label="Reserve used"
-              value={`${totals.reserveUsed} / ${run.reserveBuses}`}
-              sub={run.mode === "festflow" ? "Reserve buses sent" : "No reserve in last year's plan"}
+              label="Reserve fleet left"
+              value={`${reserveLeft} / ${run.reserveBuses}`}
+              sub={`${totals.reserveUsed + manualReserveUsed} reserve buses used`}
+              tone={reserveLeft === 0 ? "warn" : "info"}
             />
             <Stat
               label="Crowd alerts"
@@ -365,41 +551,211 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
             />
           </div>
 
+          {/* AI Live Advisor */}
           <AiAdvisor
             context={{
               festivalName: name || "Festival",
               currentClock: curClock,
               minute: curT,
               threshold,
-              stops: run.stopNames.map((n, s) => ({
-                name: n,
-                queue: cur ? cur.queues[s] ?? 0 : 0,
-                readyBuses: cur ? cur.ready[s] ?? 0 : 0,
-                status: cur
-                  ? (cur.queues[s] ?? 0) >= threshold
-                    ? "ALERT"
-                    : (cur.queues[s] ?? 0) > cap / 2
-                    ? "BEHIND"
-                    : "OK"
-                  : "OK",
-              })),
+              stops: run.stopNames.map((n, s) => {
+                const baseQ = cur ? cur.queues[s] ?? 0 : 0;
+                const deducted = manualDeductions[s] ?? 0;
+                const currentQ = Math.max(0, baseQ - deducted);
+                const extraReady = manualReserveExtra[s] ?? 0;
+                const ready = (cur ? cur.ready[s] ?? 0 : 0) + extraReady;
+                return {
+                  name: n,
+                  queue: currentQ,
+                  readyBuses: ready,
+                  status: currentQ >= threshold ? "ALERT" : currentQ > cap / 2 ? "BEHIND" : "OK",
+                };
+              }),
               totalStranded: totals.stranded,
               totalAlerts: totals.alerts,
-              reserveUsed: totals.reserveUsed,
+              reserveUsed: totals.reserveUsed + manualReserveUsed,
               totalReserve: run.reserveBuses,
               rainChance: rain,
               mode: run.mode,
             }}
           />
 
+          {/* Live Dispatch Command Cards (One per stop) */}
           <Card
-            title="Night timeline"
-            subtitle="Scrub or play through the night. Each tick is 5 minutes of simulated time."
+            title="Terminal Dispatch Stations"
+            subtitle="Trigger immediate bus departures, assign emergency reserve vehicles, or alert ground marshals per stop."
             right={
-              <div className="flex items-center gap-3">
-                <button onClick={() => setPlaying((p) => !p)} className={btnGhost}>
-                  {playing ? "Pause" : "Play"}
+              <div className="flex items-center gap-2">
+                <span className="neu-chip text-xs text-ink font-semibold">
+                  Reserve Depot: {reserveLeft} Available
+                </span>
+              </div>
+            }
+          >
+            <div className="grid gap-5 md:grid-cols-3">
+              {run.stopNames.map((n, s) => {
+                const baseQueue = cur ? cur.queues[s] ?? 0 : 0;
+                const deducted = manualDeductions[s] ?? 0;
+                const currentQueue = Math.max(0, baseQueue - deducted);
+                const extraReady = manualReserveExtra[s] ?? 0;
+                const ready = (cur ? cur.ready[s] ?? 0 : 0) + extraReady;
+                const status: "ALERT" | "BEHIND" | "OK" =
+                  currentQueue >= threshold ? "ALERT" : currentQueue > cap / 2 ? "BEHIND" : "OK";
+                const tone: Tone = status === "ALERT" ? "bad" : status === "BEHIND" ? "warn" : "good";
+
+                return (
+                  <div key={n} className="neu-inset p-5 flex flex-col justify-between">
+                    <div>
+                      <div className="flex items-start justify-between gap-2">
+                        <p className="text-sm font-bold text-ink">
+                          <span
+                            className="neu-dot mr-2 align-middle"
+                            style={{ background: STOP_COLORS[s % STOP_COLORS.length] }}
+                          />
+                          {n}
+                        </p>
+                        <Pill tone={tone}>{status}</Pill>
+                      </div>
+
+                      <div className="mt-3 flex items-baseline justify-between">
+                        <div>
+                          <p className={`font-display text-4xl tabular-nums ${status === "ALERT" ? "text-brick" : "text-ink"}`}>
+                            {fmtInt(currentQueue)}
+                          </p>
+                          <p className="text-xs text-ink-soft">waiting in queue</p>
+                        </div>
+                        <div className="text-right">
+                          <p className="font-mono text-xl font-bold text-sage">{ready}</p>
+                          <p className="text-xs text-ink-soft">ready buses</p>
+                        </div>
+                      </div>
+
+                      <dl className="mt-4 grid grid-cols-2 gap-2 text-xs text-ink-soft border-t border-black/5 dark:border-white/5 pt-3">
+                        <div>
+                          <dt>Assigned Fleet</dt>
+                          <dd className="mt-0.5 font-semibold text-ink">
+                            {run.buses[s]} buses
+                          </dd>
+                        </div>
+                        <div>
+                          <dt>Ready Capacity</dt>
+                          <dd className="mt-0.5 font-semibold text-ink">{fmtInt(ready * cap)} riders</dd>
+                        </div>
+                      </dl>
+                    </div>
+
+                    {/* Live Dispatch Action Buttons */}
+                    <div className="mt-5 space-y-2 border-t border-black/5 dark:border-white/5 pt-4">
+                      <button
+                        type="button"
+                        onClick={() => handleManualDispatch(s)}
+                        disabled={currentQueue <= 0}
+                        className={`w-full py-2 px-3 text-xs font-bold rounded-lg transition-all flex items-center justify-center gap-1.5 ${
+                          currentQueue > 0
+                            ? "bg-sage text-white hover:brightness-110 shadow cursor-pointer"
+                            : "opacity-40 cursor-not-allowed bg-black/10 dark:bg-white/10 text-ink-soft"
+                        }`}
+                      >
+                        <span>⚡</span> Dispatch Bus Now ({Math.min(cap, currentQueue)} riders)
+                      </button>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleDeployReserve(s)}
+                          disabled={reserveLeft <= 0}
+                          className={`py-1.5 px-2 text-[11px] font-semibold rounded-lg transition-all ${
+                            reserveLeft > 0
+                              ? "neu-btn text-ochre hover:text-ink cursor-pointer"
+                              : "opacity-40 cursor-not-allowed text-ink-soft"
+                          }`}
+                          title="Deploy 1 bus from reserve depot"
+                        >
+                          🚨 Deploy Reserve
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleHoldGate(s)}
+                          className="neu-btn py-1.5 px-2 text-[11px] font-semibold text-ink-soft hover:text-ink cursor-pointer"
+                          title="Alert marshals to pause gate entry"
+                        >
+                          📢 Hold Gate
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="mt-6 flex flex-wrap gap-7 text-sm text-ink-soft border-t border-black/5 dark:border-white/5 pt-4">
+              <span>
+                Riders reached stops: <strong className="text-ink">{fmtInt(cur?.arrived ?? 0)}</strong>
+              </span>
+              <span>
+                Boarded & cleared: <strong className="text-ink">{fmtInt((cur?.boarded ?? 0) + manualBoardedCount)}</strong>
+              </span>
+              <span>
+                Buses en-route: <strong className="text-ink">{cur?.onTrip ?? 0}</strong>
+              </span>
+              <span>
+                Depot reserve fleet: <strong className="text-ink">{reserveLeft} buses</strong>
+              </span>
+            </div>
+          </Card>
+
+          {/* Timeline & Chart */}
+          <Card
+            title="Night Timeline & Outflow Progression"
+            subtitle="Scrub or play through the night. Each tick represents 5 minutes of simulated transit outflow."
+            right={
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  onClick={() => {
+                    setPlaying(false);
+                    setIdx((i) => Math.max(0, i - 1));
+                  }}
+                  className={btnGhost}
+                  title="Step 5 minutes back"
+                >
+                  ⏮ -5m
                 </button>
+                <button
+                  onClick={() => {
+                    if (idx >= ticks.length - 1) {
+                      setIdx(0);
+                      setPlaying(true);
+                    } else {
+                      setPlaying((p) => !p);
+                    }
+                  }}
+                  className={btnTone("good")}
+                >
+                  {playing ? "⏸ Pause" : "▶ Play Timeline"}
+                </button>
+                <button
+                  onClick={() => {
+                    setPlaying(false);
+                    setIdx((i) => Math.min(ticks.length - 1, i + 1));
+                  }}
+                  className={btnGhost}
+                  title="Step 5 minutes forward"
+                >
+                  +5m ⏭
+                </button>
+                <div className="flex items-center gap-1 ml-2">
+                  {([1, 2, 4] as const).map((s) => (
+                    <button
+                      key={s}
+                      onClick={() => setSpeed(s)}
+                      className={`px-2 py-1 text-xs font-bold rounded ${
+                        speed === s ? "neu-inset text-terra" : "neu-flat text-ink-soft hover:text-ink"
+                      }`}
+                    >
+                      {s}x
+                    </button>
+                  ))}
+                </div>
                 <button
                   onClick={() => {
                     setPlaying(false);
@@ -409,7 +765,7 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
                 >
                   Reset
                 </button>
-                <span className="neu-chip w-20 justify-center font-mono text-sm text-ink">{curClock}</span>
+                <span className="neu-chip w-20 justify-center font-mono text-sm font-bold text-ink">{curClock}</span>
               </div>
             }
           >
@@ -435,65 +791,20 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
                 </span>
               ))}
             </div>
-
-            <div className="mt-7 grid gap-5 md:grid-cols-3">
-              {run.stopNames.map((n, s) => {
-                const queue = cur ? cur.queues[s] ?? 0 : 0;
-                const ready = cur ? cur.ready[s] ?? 0 : 0;
-                const status: "ALERT" | "BEHIND" | "OK" = queue >= threshold ? "ALERT" : queue > cap / 2 ? "BEHIND" : "OK";
-                const tone: Tone = status === "ALERT" ? "bad" : status === "BEHIND" ? "warn" : "good";
-                return (
-                  <div key={n} className="neu-inset p-5">
-                    <div className="flex items-start justify-between gap-2">
-                      <p className="text-sm font-semibold text-ink">
-                        <span className="neu-dot mr-2 align-middle" style={{ background: STOP_COLORS[s % STOP_COLORS.length] }} />
-                        {n}
-                      </p>
-                      <Pill tone={tone}>{status}</Pill>
-                    </div>
-                    <p className={`mt-3 font-display text-4xl tabular-nums ${status === "ALERT" ? "text-brick" : "text-ink"}`}>
-                      {fmtInt(queue)}
-                    </p>
-                    <p className="text-xs text-ink-soft">waiting</p>
-                    <dl className="mt-4 grid grid-cols-2 gap-3 text-xs text-ink-soft">
-                      <div>
-                        <dt>Ready buses</dt>
-                        <dd className="mt-0.5 font-semibold text-ink">
-                          {ready} of {run.buses[s]}
-                        </dd>
-                      </div>
-                      <div>
-                        <dt>Ready capacity</dt>
-                        <dd className="mt-0.5 font-semibold text-ink">{fmtInt(ready * cap)}</dd>
-                      </div>
-                    </dl>
-                  </div>
-                );
-              })}
-            </div>
-            <div className="mt-6 flex flex-wrap gap-7 text-sm text-ink-soft">
-              <span>
-                Riders reached stops: <strong className="text-ink">{fmtInt(cur?.arrived ?? 0)}</strong>
-              </span>
-              <span>
-                Boarded: <strong className="text-ink">{fmtInt(cur?.boarded ?? 0)}</strong>
-              </span>
-              <span>
-                Buses on trip: <strong className="text-ink">{cur?.onTrip ?? 0}</strong>
-              </span>
-              <span>
-                Reserve at depot: <strong className="text-ink">{cur?.reserveLeft ?? 0}</strong>
-              </span>
-            </div>
           </Card>
 
+          {/* Event Log & Re-Forecast */}
           <div className="grid gap-6 xl:grid-cols-3">
-            <Card title="Event log" className="xl:col-span-2" subtitle="Dispatch, reserve and alert decisions up to the current time.">
+            <Card
+              title="Real-Time Dispatch & Alert Stream"
+              className="xl:col-span-2"
+              subtitle="Live automated dispatch events, manual overrides, reserve deployments, and threshold alerts."
+            >
               <Well className="p-3">
                 <ul className="max-h-[420px] space-y-3 overflow-y-auto px-2 py-2 pr-3">
-                  {recentEvents.length === 0 && <li className="text-sm text-ink-soft">No events yet.</li>}
-                  {recentEvents.map((e, i) => (
-                    <li key={`${e.t}-${i}`} className="flex items-start gap-3 text-sm">
+                  {combinedEvents.length === 0 && <li className="text-sm text-ink-soft">No dispatches logged yet.</li>}
+                  {combinedEvents.map((e, i) => (
+                    <li key={`${e.t}-${i}-${e.message.slice(0, 10)}`} className="flex items-start gap-3 text-sm">
                       <span className="w-12 shrink-0 pt-0.5 font-mono text-xs text-ink-soft">{e.clock}</span>
                       <Pill tone={EVENT_TONE[e.kind] ?? "neutral"}>{e.kind}</Pill>
                       <span className="leading-relaxed text-ink">{e.message}</span>
@@ -504,25 +815,25 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
             </Card>
 
             <div className="space-y-6">
-              <Card title="Re-forecast" subtitle="Updated every 15 minutes from observed arrivals.">
+              <Card title="15-Min Re-Forecast" subtitle="Updated every 15 minutes from observed ground arrivals.">
                 {reforecast ? (
                   <div>
                     <p className="text-sm text-ink-soft">At {reforecast.clock}</p>
-                    <p className="mt-1 font-display text-3xl text-ink">{fmtInt(reforecast.estimate)} riders</p>
+                    <p className="mt-1 font-display text-3xl font-bold text-ink">{fmtInt(reforecast.estimate)} riders</p>
                     <p className="mt-1 text-sm text-ink-soft">
-                      Range {fmtInt(reforecast.low)} to {fmtInt(reforecast.high)}
+                      Confidence window: {fmtInt(reforecast.low)} – {fmtInt(reforecast.high)}
                     </p>
-                    <p className="mt-3 text-xs text-ink-soft">Plan assumed {fmtInt(run.plannedRiders)} riders.</p>
+                    <p className="mt-3 text-xs text-ink-soft">Baseline plan assumed {fmtInt(run.plannedRiders)} total riders.</p>
                   </div>
                 ) : (
                   <p className="text-sm text-ink-soft">Re-forecast starts at the last event end.</p>
                 )}
               </Card>
 
-              <Card title="Record a count" subtitle="Conductor, marshal, CCTV density or bus load factor.">
+              <Card title="Field Count Reporting" subtitle="Conductor, marshal headcount, CCTV density, or load factor.">
                 <div className="grid grid-cols-2 gap-4">
                   <label className="col-span-2 block">
-                    <span className={LABEL}>Stop</span>
+                    <span className={LABEL}>Terminal Stop</span>
                     <select className={`${inputCls} mt-2`} value={cStop} onChange={(e) => setCStop(Number(e.target.value))}>
                       {stops.map((s) => (
                         <option key={s.id} value={s.id}>
@@ -536,11 +847,11 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
                     <input className={`${inputCls} mt-2`} type="number" value={cMinute} onChange={(e) => setCMinute(Number(e.target.value))} />
                   </label>
                   <label className="block">
-                    <span className={LABEL}>Waiting</span>
+                    <span className={LABEL}>Waiting Count</span>
                     <input className={`${inputCls} mt-2`} type="number" min={0} value={cWaiting} onChange={(e) => setCWaiting(Number(e.target.value))} />
                   </label>
                   <label className="block">
-                    <span className={LABEL}>Bus load %</span>
+                    <span className={LABEL}>Bus Load %</span>
                     <input className={`${inputCls} mt-2`} type="number" min={0} max={200} value={cLoad} onChange={(e) => setCLoad(Number(e.target.value))} />
                   </label>
                   <label className="block">
@@ -548,7 +859,7 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
                     <input className={`${inputCls} mt-2`} type="number" min={0} step={0.1} value={cDensity} onChange={(e) => setCDensity(Number(e.target.value))} />
                   </label>
                   <label className="col-span-2 block">
-                    <span className={LABEL}>Source</span>
+                    <span className={LABEL}>Data Source</span>
                     <select className={`${inputCls} mt-2`} value={cSource} onChange={(e) => setCSource(e.target.value)}>
                       {COUNT_SOURCES.map((s) => (
                         <option key={s} value={s}>
@@ -559,39 +870,40 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
                   </label>
                 </div>
                 <button onClick={submitCount} className={`${btn} mt-5 w-full`}>
-                  Record count
+                  Record Ground Count
                 </button>
               </Card>
             </div>
           </div>
 
-          <Card title="Recorded counts" subtitle="Latest manual counts. Waiting at or above the threshold raises an official alert.">
+          {/* Recorded Manual Counts Table */}
+          <Card title="Recorded Field Telemetry" subtitle="Manual marshal and CCTV counts. Waiting at or above the safety threshold triggers alarms.">
             {counts.length === 0 ? (
-              <p className="text-sm text-ink-soft">No manual counts yet.</p>
+              <p className="text-sm text-ink-soft">No manual counts recorded yet.</p>
             ) : (
               <div className="overflow-x-auto">
                 <table className="min-w-full text-sm">
                   <thead>
                     <tr>
                       <th className={TH}>Time</th>
-                      <th className={TH}>Stop</th>
+                      <th className={TH}>Terminal Stop</th>
                       <th className={TH}>Waiting</th>
-                      <th className={TH}>Bus load</th>
+                      <th className={TH}>Bus Load</th>
                       <th className={TH}>Density</th>
                       <th className={TH}>Source</th>
-                      <th className={TH}>Alert</th>
+                      <th className={TH}>Alert State</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-black/5">
+                  <tbody className="divide-y divide-black/5 dark:divide-white/5">
                     {counts.map((c) => (
                       <tr key={c.id}>
                         <td className="py-3 pr-4 font-mono text-xs">{clockAt(lastEnd, c.minute)}</td>
-                        <td className="py-3 pr-4">{stopName(c.stopId)}</td>
-                        <td className="py-3 pr-4 tabular-nums">{fmtInt(c.waiting)}</td>
+                        <td className="py-3 pr-4 font-medium">{stopName(c.stopId)}</td>
+                        <td className="py-3 pr-4 tabular-nums font-semibold">{fmtInt(c.waiting)}</td>
                         <td className="py-3 pr-4 tabular-nums">{c.loadFactorPct}%</td>
-                        <td className="py-3 pr-4 tabular-nums">{c.cctvDensity}</td>
+                        <td className="py-3 pr-4 tabular-nums">{c.cctvDensity} p/m²</td>
                         <td className="py-3 pr-4">{c.source}</td>
-                        <td className="py-3">{c.alert ? <Pill tone="bad">Alert</Pill> : <Pill tone="good">Clear</Pill>}</td>
+                        <td className="py-3">{c.alert ? <Pill tone="bad">Overload Alert</Pill> : <Pill tone="good">Clear</Pill>}</td>
                       </tr>
                     ))}
                   </tbody>

@@ -144,7 +144,7 @@ export function App() {
                 view === "live" ? "neu-inset text-terra" : "text-ink-soft hover:text-ink"
               }`}
             >
-              Control Room
+              Live Dispatch
             </Link>
             <Link
               href={`/festivals/${activeFestivalId}/report`}
