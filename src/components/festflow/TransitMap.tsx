@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 import {
   Map,
   MapControls,
@@ -11,6 +11,12 @@ import {
 } from "@/components/ui/map";
 import { STOP_COLORS } from "./ui";
 import { fmtInt } from "@/lib/festflow/math";
+import {
+  TAMIL_NADU_TEMPLES,
+  searchTemples,
+  geocodeTempleOnline,
+  type TempleLocation,
+} from "@/lib/templeLocations";
 
 export interface TransitStopData {
   id: number;
@@ -30,97 +36,6 @@ interface TransitMapProps {
   onDispatch: (stopIndex: number) => void;
   onDeployReserve: (stopIndex: number) => void;
 }
-
-// Tamil Nadu, India Geographic reference coordinates (Mallur / Salem District, Tamil Nadu)
-const VENUE_COORDS: [number, number] = [78.1825, 11.5440]; // Sri Mariamman Temple & Festival Grounds, Mallur, TN
-const DEPOT_COORDS: [number, number] = [78.1740, 11.5535]; // TNSTC Fleet Bus Depot, NH 44 Highway, Mallur
-
-const STOP_COORDINATES: [number, number][] = [
-  [78.1805, 11.5410], // Terminal 1: Mallur Main Bus Stand (Town Center)
-  [78.1895, 11.5475], // Terminal 2: Temple Road Stop / East Car Street (2 km)
-  [78.1735, 11.5340], // Terminal 3: Sandhai Market Junction / Park & Ride (3.5 km)
-];
-
-// Transit road arteries connecting Depot to Terminals across Tamil Nadu road network
-const TRANSIT_ROUTES: [number, number][][] = [
-  // Corridor 1: NH 44 Highway -> Mallur Main Bus Stand
-  [
-    DEPOT_COORDS,
-    [78.1765, 11.5480],
-    [78.1790, 11.5440],
-    STOP_COORDINATES[0],
-  ],
-  // Corridor 2: North Bypass -> Temple Car Street Link
-  [
-    DEPOT_COORDS,
-    [78.1810, 11.5520],
-    [78.1860, 11.5495],
-    STOP_COORDINATES[1],
-  ],
-  // Corridor 3: Salem-Namakkal Highway Corridor -> Market Junction
-  [
-    DEPOT_COORDS,
-    [78.1750, 11.5445],
-    [78.1735, 11.5385],
-    STOP_COORDINATES[2],
-  ],
-];
-
-// Traffic choke points / bottlenecks along key Tamil Nadu corridors
-const TRAFFIC_BOTTLENECK_NODES = [
-  {
-    id: "traffic-1",
-    name: "NH 44 & Main Bazaar Chokepoint",
-    coords: [78.1770, 11.5460] as [number, number],
-    corridorIndex: 0,
-  },
-  {
-    id: "traffic-2",
-    name: "East Car Street & Temple Arch",
-    coords: [78.1850, 11.5485] as [number, number],
-    corridorIndex: 1,
-  },
-  {
-    id: "traffic-3",
-    name: "Sandhai Railway Gate Junction",
-    coords: [78.1740, 11.5370] as [number, number],
-    corridorIndex: 2,
-  },
-];
-
-// Aggregated Telecom Cellular Towers (Tamil Nadu Telecom Circle - Jio / Airtel / BSNL Macro Grid)
-const TELECOM_TOWERS = [
-  {
-    id: "telecom-1",
-    name: "Mallur North Macro Cell (Temple & Arena Sector)",
-    operator: "Telecom Consortium (Aggregated)",
-    coords: [78.1838, 11.5458] as [number, number],
-    devicesConnected: 14280,
-    coverageRadiusKm: 0.8,
-    handoverTrend: "+28% inflow / 15 min",
-    crowdEstimate: 16850,
-  },
-  {
-    id: "telecom-2",
-    name: "Town Center eNodeB (Main Bus Stand Sector)",
-    operator: "Telecom Consortium (Aggregated)",
-    coords: [78.1795, 11.5398] as [number, number],
-    devicesConnected: 5640,
-    coverageRadiusKm: 1.1,
-    handoverTrend: "+42% rapid queuing",
-    crowdEstimate: 6650,
-  },
-  {
-    id: "telecom-3",
-    name: "NH 44 Highway Cell Tower (Depot & Bypass)",
-    operator: "Telecom Consortium (Aggregated)",
-    coords: [78.1730, 11.5512] as [number, number],
-    devicesConnected: 3120,
-    coverageRadiusKm: 1.5,
-    handoverTrend: "+12% steady transit",
-    crowdEstimate: 3680,
-  },
-];
 
 // Error Boundary for WebGL Map
 class MapErrorBoundary extends React.Component<
@@ -157,6 +72,20 @@ export function TransitMap({
   onDispatch,
   onDeployReserve,
 }: TransitMapProps) {
+  // Find matching initial temple from festivalName or default to Mallur
+  const initialTemple = useMemo(() => {
+    const fn = (festivalName || "").toLowerCase();
+    const match = TAMIL_NADU_TEMPLES.find(
+      (t) => fn.includes(t.name.toLowerCase()) || fn.includes(t.town.toLowerCase())
+    );
+    return match || TAMIL_NADU_TEMPLES[0];
+  }, [festivalName]);
+
+  const [selectedTemple, setSelectedTemple] = useState<TempleLocation>(initialTemple);
+  const [templeSearchOpen, setTempleSearchOpen] = useState(false);
+  const [templeQuery, setTempleQuery] = useState("");
+  const [searchingOnline, setSearchingOnline] = useState(false);
+
   // Layer toggles
   const [showCrowdAreas, setShowCrowdAreas] = useState(true);
   const [showTrafficAreas, setShowTrafficAreas] = useState(true);
@@ -164,6 +93,117 @@ export function TransitMap({
   const [showRoutes, setShowRoutes] = useState(true);
   const [blankMode, setBlankMode] = useState(false);
   const [priorityCleared, setPriorityCleared] = useState<Record<number, boolean>>({});
+
+  // Dynamic coordinates anchored around the selected temple
+  const venueCoords = selectedTemple.coords;
+  const depotCoords: [number, number] = [venueCoords[0] - 0.0085, venueCoords[1] + 0.0095];
+
+  const stopCoords: [number, number][] = [
+    [venueCoords[0] - 0.0020, venueCoords[1] - 0.0030], // Stop 1: Town Main Stand
+    [venueCoords[0] + 0.0070, venueCoords[1] + 0.0035], // Stop 2: Temple Car Street
+    [venueCoords[0] - 0.0090, venueCoords[1] - 0.0100], // Stop 3: Market / Park & Ride
+  ];
+
+  const transitRoutes: [number, number][][] = [
+    // Corridor 1: Highway -> Main Bus Stand
+    [
+      depotCoords,
+      [venueCoords[0] - 0.0060, venueCoords[1] + 0.0040],
+      [venueCoords[0] - 0.0035, venueCoords[1] - 0.0005],
+      stopCoords[0],
+    ],
+    // Corridor 2: North Arterial -> East Car Street
+    [
+      depotCoords,
+      [venueCoords[0] - 0.0010, venueCoords[1] + 0.0080],
+      [venueCoords[0] + 0.0040, venueCoords[1] + 0.0055],
+      stopCoords[1],
+    ],
+    // Corridor 3: South Bypass -> Market Junction
+    [
+      depotCoords,
+      [venueCoords[0] - 0.0075, venueCoords[1] + 0.0010],
+      [venueCoords[0] - 0.0090, venueCoords[1] - 0.0055],
+      stopCoords[2],
+    ],
+  ];
+
+  const trafficNodes = [
+    {
+      id: "traffic-1",
+      name: `${selectedTemple.town} Highway Arterial Junction`,
+      coords: [venueCoords[0] - 0.0055, venueCoords[1] + 0.0020] as [number, number],
+      corridorIndex: 0,
+    },
+    {
+      id: "traffic-2",
+      name: `East Car Street & ${selectedTemple.name.split(" ")[0]} Arch`,
+      coords: [venueCoords[0] + 0.0025, venueCoords[1] + 0.0045] as [number, number],
+      corridorIndex: 1,
+    },
+    {
+      id: "traffic-3",
+      name: "Bypass Ring Road Crossing",
+      coords: [venueCoords[0] - 0.0085, venueCoords[1] - 0.0070] as [number, number],
+      corridorIndex: 2,
+    },
+  ];
+
+  const telecomTowers = [
+    {
+      id: "telecom-1",
+      name: `${selectedTemple.name.split(" ")[0]} Macro Cell (Sanctum Sector)`,
+      coords: [venueCoords[0] + 0.0015, venueCoords[1] + 0.0018] as [number, number],
+      devicesConnected: 14280,
+      handoverTrend: "+28% inflow / 15 min",
+      crowdEstimate: 16850,
+    },
+    {
+      id: "telecom-2",
+      name: `${selectedTemple.town} Central eNodeB (Bus Stand Sector)`,
+      coords: [venueCoords[0] - 0.0030, venueCoords[1] - 0.0042] as [number, number],
+      devicesConnected: 5640,
+      handoverTrend: "+42% rapid queuing",
+      crowdEstimate: 6650,
+    },
+    {
+      id: "telecom-3",
+      name: "Regional Highway Macro Tower (Depot & Bypass)",
+      coords: [depotCoords[0] - 0.0010, depotCoords[1] - 0.0023] as [number, number],
+      devicesConnected: 3120,
+      handoverTrend: "+12% steady transit",
+      crowdEstimate: 3680,
+    },
+  ];
+
+  // Temple suggestions based on search query
+  const templeSuggestions = useMemo(() => {
+    return searchTemples(templeQuery).slice(0, 7);
+  }, [templeQuery]);
+
+  const handleSelectTemple = (temple: TempleLocation) => {
+    setSelectedTemple(temple);
+    setTempleSearchOpen(false);
+    setTempleQuery("");
+  };
+
+  const handleOnlineSearch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!templeQuery.trim()) return;
+
+    const localMatch = searchTemples(templeQuery)[0];
+    if (localMatch) {
+      handleSelectTemple(localMatch);
+      return;
+    }
+
+    setSearchingOnline(true);
+    const online = await geocodeTempleOnline(templeQuery);
+    setSearchingOnline(false);
+    if (online) {
+      handleSelectTemple(online);
+    }
+  };
 
   // Compute total waiting across stops
   const totalWaiting = stops.reduce((acc, s) => acc + (s.queue || 0), 0);
@@ -173,7 +213,7 @@ export function TransitMap({
     if (priorityCleared[index]) {
       return {
         level: "FLUID",
-        color: "#22c55e", // Emerald
+        color: "#22c55e",
         speed: "42 km/h",
         delay: "+0 min (Bus Priority Active)",
         desc: "Signal priority granted to transit fleet",
@@ -183,7 +223,7 @@ export function TransitMap({
     if (stopQueue >= threshold) {
       return {
         level: "GRIDLOCK",
-        color: "#ef4444", // Red
+        color: "#ef4444",
         speed: "8 km/h",
         delay: "+14 min Transit Delay",
         desc: "Severe crowd egress bottleneck along corridor",
@@ -192,7 +232,7 @@ export function TransitMap({
     if (stopQueue > threshold * 0.5) {
       return {
         level: "CONGESTED",
-        color: "#f59e0b", // Amber
+        color: "#f59e0b",
         speed: "21 km/h",
         delay: "+5 min Transit Delay",
         desc: "Heavy bus circulation & pedestrian spillover",
@@ -200,7 +240,7 @@ export function TransitMap({
     }
     return {
       level: "NORMAL",
-      color: "#10b981", // Green
+      color: "#10b981",
       speed: "36 km/h",
       delay: "+1 min Transit Delay",
       desc: "Free-flowing transit corridor",
@@ -220,29 +260,25 @@ export function TransitMap({
       <div className="flex items-center justify-between z-10">
         <span className="text-xs font-bold text-ink flex items-center gap-2">
           <span className="h-2.5 w-2.5 rounded-full bg-sage animate-ping" />
-          Real-Time Operations Radar (Tamil Nadu, India)
+          Real-Time Operations Radar ({selectedTemple.name}, {selectedTemple.town})
         </span>
         <span className="text-xs font-mono text-terra font-semibold">
           Active Fleet: {busesOnTrip} | Reserves: {reserveLeft}
         </span>
       </div>
 
-      {/* Schematic SVG Map */}
       <svg className="w-full h-64 my-auto" viewBox="0 0 600 240">
-        {/* Arena Center */}
         <circle cx="280" cy="110" r="30" className="fill-terra/20 stroke-terra stroke-2" />
         <circle cx="280" cy="110" r="12" className="fill-terra" />
         <text x="280" y="155" textAnchor="middle" className="text-[11px] fill-current font-bold">
-          {festivalName || "Temple Grounds"}
+          {selectedTemple.name}
         </text>
 
-        {/* Central Bus Depot */}
         <rect x="420" y="40" width="36" height="36" rx="6" className="fill-stone-800 dark:fill-stone-200" />
         <text x="438" y="90" textAnchor="middle" className="text-[10px] fill-current font-semibold">
           TNSTC Depot ({reserveLeft})
         </text>
 
-        {/* Transit Arteries & Terminals */}
         {stops.map((st, i) => {
           const x = 120 + i * 160;
           const y = 190;
@@ -251,7 +287,6 @@ export function TransitMap({
 
           return (
             <g key={st.id || i}>
-              {/* Corridor Line */}
               <line
                 x1="438"
                 y1="58"
@@ -262,7 +297,6 @@ export function TransitMap({
                 strokeDasharray={traffic.level === "GRIDLOCK" ? "6,4" : undefined}
                 opacity="0.8"
               />
-              {/* Terminal Circle */}
               <circle
                 cx={x}
                 cy={y}
@@ -298,12 +332,80 @@ export function TransitMap({
       {/* Real-Time Operational Toolbar */}
       <div className="bg-sand-light/80 dark:bg-stone-900/80 backdrop-blur-md p-3.5 border-b border-black/5 dark:border-white/5 flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2">
-          <div className="neu-chip px-3 py-1 bg-white/90 dark:bg-stone-800/90 flex items-center gap-2 shadow-xs">
-            <span className="inline-block h-2 w-2 rounded-full bg-sage animate-ping" />
-            <span className="text-xs font-bold text-ink">mapcn Real-Time Telemetry</span>
+          {/* Temple Search / Selector Dropdown */}
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setTempleSearchOpen((o) => !o)}
+              className="neu-chip bg-amber-500/10 text-amber-900 dark:text-amber-300 font-bold text-xs px-2.5 py-1 cursor-pointer flex items-center gap-1.5 hover:bg-amber-500/20 shadow-xs border border-amber-500/20"
+              title="Search and switch temple location in Tamil Nadu"
+            >
+              <span>🛕</span>
+              <span className="font-display">{selectedTemple.name}</span>
+              <span className="text-[10px] text-ink-soft">▼ Search</span>
+            </button>
+
+            {/* Temple Search Popover Modal */}
+            {templeSearchOpen && (
+              <div className="absolute top-full left-0 mt-2 z-50 w-80 neu-raised p-3 rounded-2xl border border-black/10 dark:border-white/10 shadow-2xl space-y-2">
+                <div className="flex items-center justify-between pb-1 border-b border-black/5 dark:border-white/5">
+                  <span className="text-xs font-bold text-ink flex items-center gap-1">
+                    <span>🛕</span> Pinpoint Temple on Map
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setTempleSearchOpen(false)}
+                    className="text-xs text-ink-soft hover:text-ink cursor-pointer px-1"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                <form onSubmit={handleOnlineSearch} className="flex gap-1.5">
+                  <input
+                    type="text"
+                    value={templeQuery}
+                    onChange={(e) => setTempleQuery(e.target.value)}
+                    placeholder="Search temple (e.g. Meenakshi, Palani)..."
+                    className="neu-field text-xs py-1 px-2 flex-1"
+                    autoFocus
+                  />
+                  <button
+                    type="submit"
+                    disabled={searchingOnline}
+                    className="neu-btn px-2.5 text-xs font-bold text-terra cursor-pointer"
+                  >
+                    {searchingOnline ? "…" : "Find"}
+                  </button>
+                </form>
+
+                <div className="max-h-48 overflow-y-auto space-y-1 pt-1">
+                  <p className="text-[10px] uppercase font-bold text-ink-soft px-1">Tamil Nadu Temple Registry:</p>
+                  {templeSuggestions.map((t) => (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => handleSelectTemple(t)}
+                      className={`w-full text-left p-1.5 rounded-lg text-xs flex items-center justify-between cursor-pointer transition-colors ${
+                        selectedTemple.id === t.id
+                          ? "bg-terra/10 font-bold text-terra"
+                          : "hover:bg-black/5 dark:hover:bg-white/5 text-ink"
+                      }`}
+                    >
+                      <div>
+                        <p className="font-semibold">{t.name}</p>
+                        <p className="text-[10px] text-ink-soft">{t.town}, {t.district} District</p>
+                      </div>
+                      <span className="text-[10px] text-terra">Show ›</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
+
           <span className="neu-chip bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 font-bold text-xs px-2.5 py-1">
-            📍 Tamil Nadu, India
+            📍 {selectedTemple.town}, Tamil Nadu
           </span>
 
           {/* Crowd Areas Filter Toggle */}
@@ -396,8 +498,8 @@ export function TransitMap({
       <div className="h-[480px] w-full relative">
         <MapErrorBoundary fallback={renderFallbackRadar()}>
           <Map
-            center={[78.1815, 11.5435]}
-            zoom={13.8}
+            center={venueCoords}
+            zoom={14.0}
             blank={blankMode}
             className="h-full w-full"
           >
@@ -405,14 +507,14 @@ export function TransitMap({
 
             {/* Dynamic Real-Time Traffic Corridors */}
             {showRoutes &&
-              TRANSIT_ROUTES.map((coords, rIdx) => {
+              transitRoutes.map((coords, rIdx) => {
                 const traffic = getTrafficStatus(rIdx);
                 const routeColor = showTrafficAreas ? traffic.color : STOP_COLORS[rIdx % STOP_COLORS.length];
                 const routeWidth = traffic.level === "GRIDLOCK" ? 5 : 3.5;
 
                 return (
                   <MapRoute
-                    key={`route-${rIdx}`}
+                    key={`route-${rIdx}-${selectedTemple.id}`}
                     coordinates={coords}
                     color={routeColor}
                     width={routeWidth}
@@ -423,14 +525,13 @@ export function TransitMap({
 
             {/* Real-Time Traffic Chokepoint & Bottleneck Markers */}
             {showTrafficAreas &&
-              TRAFFIC_BOTTLENECK_NODES.map((node) => {
+              trafficNodes.map((node) => {
                 const traffic = getTrafficStatus(node.corridorIndex);
                 const isChoke = traffic.level === "GRIDLOCK";
-                const isHeavy = traffic.level === "CONGESTED";
 
                 return (
                   <MapMarker
-                    key={node.id}
+                    key={`${node.id}-${selectedTemple.id}`}
                     longitude={node.coords[0]}
                     latitude={node.coords[1]}
                   >
@@ -491,9 +592,9 @@ export function TransitMap({
 
             {/* Aggregated Telecom Cellular Signaling & Device Density Towers */}
             {showTelecom &&
-              TELECOM_TOWERS.map((tower) => (
+              telecomTowers.map((tower) => (
                 <MapMarker
-                  key={tower.id}
+                  key={`${tower.id}-${selectedTemple.id}`}
                   longitude={tower.coords[0]}
                   latitude={tower.coords[1]}
                 >
@@ -544,52 +645,52 @@ export function TransitMap({
                 </MapMarker>
               ))}
 
-            {/* Festival Arena / Main Stage Crowd Egress Center */}
-            <MapMarker longitude={VENUE_COORDS[0]} latitude={VENUE_COORDS[1]}>
+            {/* Festival Venue / Searched Temple Center Pin */}
+            <MapMarker longitude={venueCoords[0]} latitude={venueCoords[1]}>
               <MarkerContent>
                 <div className="flex flex-col items-center">
                   <div className="relative">
                     {showCrowdAreas && (
-                      <span className="absolute -inset-2 rounded-full bg-terra animate-ping opacity-30" />
+                      <span className="absolute -inset-2.5 rounded-full bg-terra animate-ping opacity-35" />
                     )}
-                    <div className="h-10 w-10 rounded-full bg-terra text-white flex items-center justify-center shadow-xl ring-4 ring-terra/30 font-bold text-sm">
-                      🎪
+                    <div className="h-10 w-10 rounded-full bg-terra text-white flex items-center justify-center shadow-xl ring-4 ring-terra/30 font-bold text-base">
+                      🛕
                     </div>
                   </div>
                   <span className="mt-1 bg-white/95 dark:bg-stone-900/95 px-2 py-0.5 rounded text-[10px] font-bold text-ink shadow border border-black/5 dark:border-white/5 whitespace-nowrap">
-                    {festivalName || "Main Arena Outflow"}
+                    {selectedTemple.name}
                   </span>
                 </div>
               </MarkerContent>
               <MarkerPopup>
-                <div className="p-2.5 text-xs max-w-[220px]">
-                  <p className="font-bold text-ink text-sm">🎪 {festivalName || "Main Event Venue"}</p>
-                  <p className="text-ink-soft mt-1">Primary Event Egress Outflow Origin</p>
+                <div className="p-2.5 text-xs max-w-[230px]">
+                  <p className="font-bold text-ink text-sm">🛕 {selectedTemple.name}</p>
+                  <p className="text-ink-soft mt-1">{selectedTemple.description}</p>
                   <div className="mt-2 text-[11px] bg-sand/60 dark:bg-stone-800/60 p-2 rounded space-y-1">
-                    <p className="text-terra font-semibold">🔥 Peak Outflow Surge Active</p>
-                    <p className="text-ink-soft">Crowd dispersal splitting towards Terminals 1, 2, and 3.</p>
+                    <p className="text-terra font-semibold">📍 Location: {selectedTemple.town}, {selectedTemple.district} District</p>
+                    <p className="text-ink-soft font-mono text-[10px]">[{venueCoords[0].toFixed(4)}°E, {venueCoords[1].toFixed(4)}°N]</p>
                   </div>
                 </div>
               </MarkerPopup>
             </MapMarker>
 
             {/* Central Reserve Fleet Depot Marker */}
-            <MapMarker longitude={DEPOT_COORDS[0]} latitude={DEPOT_COORDS[1]}>
+            <MapMarker longitude={depotCoords[0]} latitude={depotCoords[1]}>
               <MarkerContent>
                 <div className="flex flex-col items-center">
                   <div className="h-8 w-8 rounded-full bg-ink text-sand flex items-center justify-center shadow-lg ring-3 ring-ink/20 font-bold text-xs">
                     🏢
                   </div>
                   <span className="mt-1 bg-white/95 dark:bg-stone-900/95 px-1.5 py-0.5 rounded text-[10px] font-bold text-ink shadow border border-black/5 dark:border-white/5 whitespace-nowrap">
-                    Central Depot ({reserveLeft})
+                    TNSTC Depot ({reserveLeft})
                   </span>
                 </div>
               </MarkerContent>
               <MarkerPopup>
                 <div className="p-2.5 text-xs min-w-[200px]">
-                  <p className="font-bold text-ink text-sm">🏢 Central Bus Depot</p>
+                  <p className="font-bold text-ink text-sm">🏢 TNSTC Fleet Bus Depot</p>
                   <p className="text-ink-soft mt-1">
-                    Reserve fleet holding station & emergency operator staging.
+                    Regional fleet holding station for {selectedTemple.town} & emergency operator staging.
                   </p>
                   <div className="mt-2 font-mono text-sage font-bold text-sm bg-sage/10 p-1.5 rounded">
                     {reserveLeft} Reserve Buses Ready for Deployment
@@ -600,18 +701,17 @@ export function TransitMap({
 
             {/* Boarding Terminals & Live Crowd Surge Areas */}
             {stops.map((st, i) => {
-              const coords = STOP_COORDINATES[i % STOP_COORDINATES.length];
+              const coords = stopCoords[i % stopCoords.length];
               const color = STOP_COLORS[i % STOP_COLORS.length];
               const isAlert = st.queue >= threshold;
               const isBehind = st.queue > 70 / 2;
-              const densityPsm = (st.queue / 150).toFixed(1); // approximate pax / m² density
+              const densityPsm = (st.queue / 150).toFixed(1);
 
               return (
-                <MapMarker key={st.id || i} longitude={coords[0]} latitude={coords[1]}>
+                <MapMarker key={`${st.id || i}-${selectedTemple.id}`} longitude={coords[0]} latitude={coords[1]}>
                   <MarkerContent>
                     <div className="flex flex-col items-center cursor-pointer group">
                       <div className="relative">
-                        {/* Live Crowd Heat Aura Ring */}
                         {showCrowdAreas && isAlert && (
                           <>
                             <span className="absolute -inset-4 rounded-full bg-brick animate-ping opacity-40" />
@@ -622,7 +722,6 @@ export function TransitMap({
                           <span className="absolute -inset-2 rounded-full bg-amber-500/40 animate-pulse" />
                         )}
 
-                        {/* Terminal Icon */}
                         <div
                           className="h-9 w-9 rounded-full text-white flex items-center justify-center shadow-xl ring-2 ring-white text-xs font-bold transition-transform group-hover:scale-110"
                           style={{ background: isAlert ? "#a0392c" : color }}
@@ -631,7 +730,6 @@ export function TransitMap({
                         </div>
                       </div>
 
-                      {/* Live Queue & Density Tag */}
                       <div className="mt-1 bg-white/95 dark:bg-stone-900/95 px-2 py-0.5 rounded-md shadow text-[10px] font-bold text-ink flex items-center gap-1.5 border border-black/5 dark:border-white/5">
                         <span>{st.name}</span>
                         <span
@@ -661,7 +759,6 @@ export function TransitMap({
                         </span>
                       </div>
 
-                      {/* Real-time Crowd Density Stats */}
                       <div className="mt-2.5 grid grid-cols-2 gap-2 text-ink-soft bg-black/5 dark:bg-white/5 p-2 rounded">
                         <div>
                           <span className="text-[10px] uppercase block">Crowd In Queue</span>
@@ -683,7 +780,6 @@ export function TransitMap({
                         </div>
                       </div>
 
-                      {/* Instant Operator Control Actions */}
                       <div className="mt-3 space-y-1.5 pt-2 border-t border-black/10 dark:border-white/10">
                         <button
                           type="button"
