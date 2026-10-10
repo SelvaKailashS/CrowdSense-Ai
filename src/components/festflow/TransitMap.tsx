@@ -88,6 +88,40 @@ const TRAFFIC_BOTTLENECK_NODES = [
   },
 ];
 
+// Aggregated Telecom Cellular Towers (Tamil Nadu Telecom Circle - Jio / Airtel / BSNL Macro Grid)
+const TELECOM_TOWERS = [
+  {
+    id: "telecom-1",
+    name: "Mallur North Macro Cell (Temple & Arena Sector)",
+    operator: "Telecom Consortium (Aggregated)",
+    coords: [78.1838, 11.5458] as [number, number],
+    devicesConnected: 14280,
+    coverageRadiusKm: 0.8,
+    handoverTrend: "+28% inflow / 15 min",
+    crowdEstimate: 16850,
+  },
+  {
+    id: "telecom-2",
+    name: "Town Center eNodeB (Main Bus Stand Sector)",
+    operator: "Telecom Consortium (Aggregated)",
+    coords: [78.1795, 11.5398] as [number, number],
+    devicesConnected: 5640,
+    coverageRadiusKm: 1.1,
+    handoverTrend: "+42% rapid queuing",
+    crowdEstimate: 6650,
+  },
+  {
+    id: "telecom-3",
+    name: "NH 44 Highway Cell Tower (Depot & Bypass)",
+    operator: "Telecom Consortium (Aggregated)",
+    coords: [78.1730, 11.5512] as [number, number],
+    devicesConnected: 3120,
+    coverageRadiusKm: 1.5,
+    handoverTrend: "+12% steady transit",
+    crowdEstimate: 3680,
+  },
+];
+
 // Error Boundary for WebGL Map
 class MapErrorBoundary extends React.Component<
   { children: React.ReactNode; fallback: React.ReactNode },
@@ -126,6 +160,7 @@ export function TransitMap({
   // Layer toggles
   const [showCrowdAreas, setShowCrowdAreas] = useState(true);
   const [showTrafficAreas, setShowTrafficAreas] = useState(true);
+  const [showTelecom, setShowTelecom] = useState(true);
   const [showRoutes, setShowRoutes] = useState(true);
   const [blankMode, setBlankMode] = useState(false);
   const [priorityCleared, setPriorityCleared] = useState<Record<number, boolean>>({});
@@ -297,6 +332,20 @@ export function TransitMap({
             🚦 Traffic Congestion {showTrafficAreas ? "✓" : ""}
           </button>
 
+          {/* Aggregated Mobile Network Devices Toggle */}
+          <button
+            type="button"
+            onClick={() => setShowTelecom((v) => !v)}
+            className={`neu-chip cursor-pointer text-xs font-semibold px-2.5 py-1 transition-all ${
+              showTelecom
+                ? "bg-purple-700 text-white ring-1 ring-purple-700/50 shadow-xs"
+                : "bg-white/80 dark:bg-stone-800/80 text-ink-soft hover:text-ink"
+            }`}
+            title="Aggregated mobile network signaling & device density (No individual tracking)"
+          >
+            📶 Mobile Devices (Telecom) {showTelecom ? "✓" : ""}
+          </button>
+
           {/* Transit Routes Filter Toggle */}
           <button
             type="button"
@@ -439,6 +488,61 @@ export function TransitMap({
                   </MapMarker>
                 );
               })}
+
+            {/* Aggregated Telecom Cellular Signaling & Device Density Towers */}
+            {showTelecom &&
+              TELECOM_TOWERS.map((tower) => (
+                <MapMarker
+                  key={tower.id}
+                  longitude={tower.coords[0]}
+                  latitude={tower.coords[1]}
+                >
+                  <MarkerContent>
+                    <div className="flex flex-col items-center cursor-pointer group">
+                      <div className="relative">
+                        <span className="absolute -inset-2 rounded-full bg-purple-500/40 animate-pulse" />
+                        <div className="h-7 w-7 rounded-full bg-purple-700 text-white flex items-center justify-center shadow-md ring-2 ring-white text-[11px] font-bold">
+                          📡
+                        </div>
+                      </div>
+                      <span className="mt-0.5 bg-white/95 dark:bg-stone-900/95 px-1.5 py-0.5 rounded text-[9px] font-bold text-purple-700 dark:text-purple-300 shadow border border-purple-500/20 whitespace-nowrap">
+                        {fmtInt(tower.devicesConnected)} devices
+                      </span>
+                    </div>
+                  </MarkerContent>
+                  <MarkerPopup>
+                    <div className="p-2.5 text-xs min-w-[230px]">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="font-bold text-xs text-ink">{tower.name}</p>
+                        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-purple-100 text-purple-800 dark:bg-purple-950 dark:text-purple-300">
+                          Telecom Telemetry
+                        </span>
+                      </div>
+                      <p className="text-[10px] text-ink-soft mt-1">
+                        Aggregated mobile signaling density (Zero individual tracking)
+                      </p>
+                      <div className="mt-2.5 bg-purple-50/60 dark:bg-purple-950/20 p-2 rounded text-[11px] space-y-1 font-mono border border-purple-200/40 dark:border-purple-800/40">
+                        <div className="flex justify-between">
+                          <span className="text-ink-soft">Active Devices:</span>
+                          <span className="font-bold text-ink">{fmtInt(tower.devicesConnected)} SIMs</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-ink-soft">Crowd Footfall Est:</span>
+                          <span className="font-bold text-purple-600">{fmtInt(tower.crowdEstimate)} pax</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-ink-soft">Tower Handover:</span>
+                          <span className="font-bold text-emerald-600">{tower.handoverTrend}</span>
+                        </div>
+                      </div>
+                      <div className="mt-2 text-[10px] text-ink-soft flex items-center gap-1.5">
+                        <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                        <span>Feeds live predictive curve & queue build detection</span>
+                      </div>
+                    </div>
+                  </MarkerPopup>
+                </MapMarker>
+              ))}
 
             {/* Festival Arena / Main Stage Crowd Egress Center */}
             <MapMarker longitude={VENUE_COORDS[0]} latitude={VENUE_COORDS[1]}>

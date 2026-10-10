@@ -51,7 +51,13 @@ const EVENT_TONE: Record<string, Tone> = {
   cutoff: "warn",
 };
 
-const COUNT_SOURCES = ["Marshal count", "Conductor count", "CCTV density", "Bus load factor"];
+const COUNT_SOURCES = [
+  "Marshal headcount",
+  "CCTV density AI",
+  "Aggregated mobile network (Cellular pings)",
+  "Conductor ticket scan",
+  "Bus load factor",
+];
 
 const LABEL = "text-[11px] font-semibold uppercase tracking-[0.12em] text-ink-soft";
 const TH = "py-2 pr-4 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-ink-soft";
@@ -990,7 +996,7 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
                     <span className={LABEL}>Data Source</span>
                     <select className={`${inputCls} mt-2`} value={cSource} onChange={(e) => setCSource(e.target.value)}>
                       {COUNT_SOURCES.map((s) => (
-                        <option key={s.id} value={s.id}>
+                        <option key={s} value={s}>
                           {s}
                         </option>
                       ))}
