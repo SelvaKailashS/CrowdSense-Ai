@@ -111,6 +111,63 @@ export function App() {
     }
   });
 
+  // Neon PostgreSQL state
+  const [showNeonModal, setShowNeonModal] = useState(false);
+  const [neonUrl, setNeonUrl] = useState(() => {
+    try {
+      return localStorage.getItem("crowdsense_neon_db_url") || "";
+    } catch {
+      return "";
+    }
+  });
+  const [neonConnected, setNeonConnected] = useState(() => Boolean(neonUrl));
+  const [neonTesting, setNeonTesting] = useState(false);
+  const [neonStatusMsg, setNeonStatusMsg] = useState<string | null>(null);
+
+  const handleTestNeon = async () => {
+    if (!neonUrl.trim()) {
+      setNeonStatusMsg("Please enter a valid Neon PostgreSQL connection string");
+      return;
+    }
+    setNeonTesting(true);
+    setNeonStatusMsg("Pinging Neon cloud database…");
+    const { testNeonConnection, saveNeonUrl } = await import("./lib/neonClient");
+    const res = await testNeonConnection(neonUrl);
+    setNeonTesting(false);
+    if (res.success) {
+      saveNeonUrl(neonUrl);
+      setNeonConnected(true);
+      setNeonStatusMsg(`Connected successfully! Server: ${res.version}`);
+    } else {
+      setNeonConnected(false);
+      setNeonStatusMsg(`Connection failed: ${res.error}`);
+    }
+  };
+
+  const handleSyncToNeon = async () => {
+    if (!neonUrl.trim()) return;
+    setNeonTesting(true);
+    setNeonStatusMsg("Initializing schema and migrating festival data to Neon…");
+    const { pushToNeon, saveNeonUrl } = await import("./lib/neonClient");
+    saveNeonUrl(neonUrl);
+    const res = await pushToNeon(festivalsList, neonUrl);
+    setNeonTesting(false);
+    if (res.success) {
+      setNeonConnected(true);
+      setNeonStatusMsg(`Successfully migrated ${res.insertedCount} festivals to Neon PostgreSQL tables!`);
+    } else {
+      setNeonStatusMsg(`Sync error: ${res.error}`);
+    }
+  };
+
+  const handleDisconnectNeon = async () => {
+    const { clearNeonUrl } = await import("./lib/neonClient");
+    clearNeonUrl();
+    setNeonUrl("");
+    setNeonConnected(false);
+    setNeonStatusMsg("Disconnected from Neon.");
+  };
+
   useEffect(() => {
     if (isDark) {
       document.documentElement.classList.add("dark");
@@ -241,6 +298,14 @@ export function App() {
             </Link>
             <span className="neu-chip ml-2 hidden md:inline-flex text-sage">● Real-Time AI Active</span>
             <button
+              onClick={() => setShowNeonModal(true)}
+              className="neu-chip bg-emerald-500/10 text-emerald-800 dark:text-emerald-300 font-semibold text-xs px-2.5 py-1.5 cursor-pointer hover:bg-emerald-500/20 transition-all flex items-center gap-1.5"
+              title="Connect Neon Serverless PostgreSQL Database"
+            >
+              <span>🐘</span>
+              <span>{neonConnected ? "Neon DB Connected ✓" : "Connect Neon DB"}</span>
+            </button>
+            <button
               onClick={() => setIsDark((d) => !d)}
               className="neu-btn px-3 py-1.5 text-xs rounded-xl"
               title={isDark ? "Switch to Warm Clay light mode" : "Switch to Deep Obsidian dark mode"}
@@ -251,6 +316,83 @@ export function App() {
           </div>
         </div>
       </nav>
+
+      {/* Neon Database Connection Modal */}
+      {showNeonModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="neu-raised max-w-lg w-full p-6 space-y-4 relative">
+            <div className="flex items-center justify-between border-b border-black/10 dark:border-white/10 pb-3">
+              <div className="flex items-center gap-2">
+                <span className="text-2xl">🐘</span>
+                <div>
+                  <h3 className="font-display font-bold text-base text-ink">Neon Serverless PostgreSQL</h3>
+                  <p className="text-[11px] text-ink-soft">Direct cloud database synchronization for festival events & telemetry</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowNeonModal(false)}
+                className="text-ink-soft hover:text-ink font-bold text-sm cursor-pointer p-1"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <div>
+                <label className="block font-semibold text-ink mb-1">Neon Database Connection String (Postgres URI)</label>
+                <input
+                  type="password"
+                  placeholder="postgresql://neondb_owner:***@ep-***-pooler.c-***.neon.tech/neondb?sslmode=require"
+                  value={neonUrl}
+                  onChange={(e) => setNeonUrl(e.target.value)}
+                  className="neu-field w-full text-xs font-mono py-2"
+                />
+                <p className="text-[10px] text-ink-soft mt-1">
+                  Copy from your <strong>Neon Console &gt; Connection details &gt; Pooled connection</strong>.
+                </p>
+              </div>
+
+              {neonStatusMsg && (
+                <div
+                  className={`p-2.5 rounded text-xs font-medium ${
+                    neonConnected ? "bg-emerald-500/10 text-emerald-800 dark:text-emerald-300 border border-emerald-500/20" : "bg-brick/10 text-brick border border-brick/20"
+                  }`}
+                >
+                  {neonStatusMsg}
+                </div>
+              )}
+
+              <div className="flex flex-wrap gap-2 pt-2 border-t border-black/5 dark:border-white/5">
+                <button
+                  type="button"
+                  disabled={neonTesting}
+                  onClick={handleTestNeon}
+                  className="neu-btn px-3 py-1.5 font-bold text-terra cursor-pointer text-xs"
+                >
+                  {neonTesting ? "Testing Ping…" : "🔌 Test Connection"}
+                </button>
+                <button
+                  type="button"
+                  disabled={neonTesting || !neonUrl}
+                  onClick={handleSyncToNeon}
+                  className="neu-btn px-3 py-1.5 font-bold text-emerald-700 dark:text-emerald-400 cursor-pointer text-xs"
+                >
+                  🚀 Initialize Tables & Sync Data
+                </button>
+                {neonConnected && (
+                  <button
+                    type="button"
+                    onClick={handleDisconnectNeon}
+                    className="neu-btn px-3 py-1.5 font-semibold text-brick cursor-pointer text-xs ml-auto"
+                  >
+                    Disconnect
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Main Content Body */}
       <main className="mx-auto max-w-7xl px-4 sm:px-6 py-8">
