@@ -693,7 +693,7 @@ export default function LiveView({ festivalId }: { festivalId: number }) {
 
           {/* Geographic Fleet & Corridor Transit Map (mapcn) */}
           <TransitMap
-            festivalName={festival?.name ?? "Metropolis Music Festival"}
+            festivalName={name || "Festival Operations"}
             stops={stopNames.map((n, s) => {
               const baseQueue = cur ? cur.queues[s] ?? 0 : 0;
               const deducted = manualDeductions[s] ?? 0;
