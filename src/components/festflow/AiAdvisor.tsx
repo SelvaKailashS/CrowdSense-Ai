@@ -86,12 +86,12 @@ export function AiAdvisor({ context, onExecuteTransfer }: AiAdvisorProps) {
         <div className="neu-inset mb-4 p-4 text-xs">
           <p className="font-semibold text-ink mb-1">Google Gemini API Key (Optional)</p>
           <p className="text-ink-soft mb-2">
-            Connect your Gemini API key to activate live real-time LLM inference under Constraint-2, or leave blank to use the built-in deterministic offline engine.
+            Connect your Gemini API key (supports standard <code className="font-mono">AIzaSy...</code> and modern <code className="font-mono">AQ....</code> keys) to activate live real-time LLM inference under Constraint-2, or leave blank to use the built-in deterministic offline engine.
           </p>
           <div className="flex gap-2">
             <input
               type="password"
-              placeholder="AIzaSy..."
+              placeholder="Paste Gemini API Key (AIzaSy... or AQ....)"
               value={apiKey}
               onChange={(e) => saveKey(e.target.value)}
               className="neu-field text-xs py-1"
