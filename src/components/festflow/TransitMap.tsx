@@ -104,39 +104,36 @@ export function TransitMap({
     return () => clearInterval(timer);
   }, []);
 
-  // Dynamic coordinates anchored around the selected temple
+  // Dynamic coordinates anchored around the selected temple's exact ground locations
   const venueCoords = selectedTemple.coords;
-  const depotCoords: [number, number] = [venueCoords[0] - 0.0085, venueCoords[1] + 0.0095];
+  const depotCoords: [number, number] = selectedTemple.depot?.coords || [venueCoords[0] - 0.0085, venueCoords[1] + 0.0095];
+  const depotName = selectedTemple.depot?.name || `TNSTC ${selectedTemple.town} Fleet Depot`;
 
-  const stopCoords: [number, number][] = [
-    [venueCoords[0] - 0.0020, venueCoords[1] - 0.0030], // Stop 1: Town Main Stand
-    [venueCoords[0] + 0.0070, venueCoords[1] + 0.0035], // Stop 2: Temple Car Street
-    [venueCoords[0] - 0.0090, venueCoords[1] - 0.0100], // Stop 3: Market / Park & Ride
-  ];
+  // Exact real-world boarding stop coordinates from the temple registry
+  const stopCoords: [number, number][] = useMemo(() => {
+    if (selectedTemple.stops && selectedTemple.stops.length > 0) {
+      return selectedTemple.stops.map((s) => s.coords);
+    }
+    return [
+      [venueCoords[0] - 0.0020, venueCoords[1] - 0.0030],
+      [venueCoords[0] + 0.0070, venueCoords[1] + 0.0035],
+      [venueCoords[0] - 0.0090, venueCoords[1] - 0.0100],
+    ];
+  }, [selectedTemple, venueCoords]);
 
-  const transitRoutes: [number, number][][] = [
-    // Corridor 1: Highway -> Main Bus Stand
-    [
-      depotCoords,
-      [venueCoords[0] - 0.0060, venueCoords[1] + 0.0040],
-      [venueCoords[0] - 0.0035, venueCoords[1] - 0.0005],
-      stopCoords[0],
-    ],
-    // Corridor 2: North Arterial -> East Car Street
-    [
-      depotCoords,
-      [venueCoords[0] - 0.0010, venueCoords[1] + 0.0080],
-      [venueCoords[0] + 0.0040, venueCoords[1] + 0.0055],
-      stopCoords[1],
-    ],
-    // Corridor 3: South Bypass -> Market Junction
-    [
-      depotCoords,
-      [venueCoords[0] - 0.0075, venueCoords[1] + 0.0010],
-      [venueCoords[0] - 0.0090, venueCoords[1] - 0.0055],
-      stopCoords[2],
-    ],
-  ];
+  // Dynamic realistic transit corridors connecting the depot, via-points, and stops
+  const transitRoutes: [number, number][][] = useMemo(() => {
+    return stopCoords.map((stCoord, idx) => {
+      // Midpoint arterial calculation for realistic curvature
+      const midLon = (depotCoords[0] + stCoord[0]) / 2 + (idx === 1 ? 0.0025 : idx === 2 ? -0.0020 : 0.0010);
+      const midLat = (depotCoords[1] + stCoord[1]) / 2 + (idx === 1 ? -0.0015 : idx === 0 ? 0.0020 : -0.0025);
+      return [
+        depotCoords,
+        [midLon, midLat] as [number, number],
+        stCoord,
+      ];
+    });
+  }, [depotCoords, stopCoords]);
 
   // Interpolate bus positions along corridors for live GPS tracking
   const liveBuses = useMemo(() => {
@@ -158,7 +155,8 @@ export function TransitMap({
     // Generate dynamic live buses moving along the active corridors
     transitRoutes.forEach((route, corridorIdx) => {
       const stop = stops[corridorIdx] || { name: `Terminal ${corridorIdx + 1}`, queue: 50 };
-      const stopName = stop.name;
+      const stopInfo = selectedTemple.stops?.[corridorIdx % (selectedTemple.stops?.length || 1)];
+      const stopName = stopInfo ? stopInfo.name : stop.name;
       const numActive = Math.max(2, Math.min(6, (stop as any).assignedBuses ? Math.round((stop as any).assignedBuses / 3) : 3));
 
       for (let b = 0; b < numActive; b++) {
@@ -767,15 +765,15 @@ export function TransitMap({
                     🏢
                   </div>
                   <span className="mt-1 bg-white/95 dark:bg-stone-900/95 px-1.5 py-0.5 rounded text-[10px] font-bold text-ink shadow border border-black/5 dark:border-white/5 whitespace-nowrap">
-                    TNSTC Depot ({reserveLeft})
+                    {depotName.split(" ")[0]} Depot ({reserveLeft})
                   </span>
                 </div>
               </MarkerContent>
               <MarkerPopup>
-                <div className="p-2.5 text-xs min-w-[200px]">
-                  <p className="font-bold text-ink text-sm">🏢 TNSTC Fleet Bus Depot</p>
+                <div className="p-2.5 text-xs min-w-[220px]">
+                  <p className="font-bold text-ink text-sm">🏢 {depotName}</p>
                   <p className="text-ink-soft mt-1">
-                    Regional fleet holding station for {selectedTemple.town} & emergency operator staging.
+                    Central staging and reserve holding depot servicing {selectedTemple.name}.
                   </p>
                   <div className="mt-2 font-mono text-sage font-bold text-sm bg-sage/10 p-1.5 rounded">
                     {reserveLeft} Reserve Buses Ready for Deployment
@@ -787,6 +785,8 @@ export function TransitMap({
             {/* Boarding Terminals & Live Crowd Surge Areas */}
             {stops.map((st, i) => {
               const coords = stopCoords[i % stopCoords.length];
+              const stopInfo = selectedTemple.stops?.[i % (selectedTemple.stops?.length || 1)];
+              const displayName = stopInfo ? stopInfo.name : st.name;
               const color = STOP_COLORS[i % STOP_COLORS.length];
               const isAlert = st.queue >= threshold;
               const isBehind = st.queue > 70 / 2;
@@ -816,7 +816,7 @@ export function TransitMap({
                       </div>
 
                       <div className="mt-1 bg-white/95 dark:bg-stone-900/95 px-2 py-0.5 rounded-md shadow text-[10px] font-bold text-ink flex items-center gap-1.5 border border-black/5 dark:border-white/5">
-                        <span>{st.name}</span>
+                        <span>{displayName}</span>
                         <span
                           className={`font-mono px-1 rounded text-[9px] ${
                             isAlert
@@ -834,7 +834,12 @@ export function TransitMap({
                   <MarkerPopup>
                     <div className="p-3 text-xs min-w-[220px]">
                       <div className="flex items-center justify-between gap-2">
-                        <p className="font-bold text-sm text-ink">{st.name}</p>
+                        <div>
+                          <p className="font-bold text-sm text-ink">{displayName}</p>
+                          {stopInfo?.description && (
+                            <p className="text-[10px] text-ink-soft">{stopInfo.description}</p>
+                          )}
+                        </div>
                         <span
                           className={`text-[9px] font-bold px-1.5 py-0.5 rounded text-white ${
                             isAlert ? "bg-brick" : isBehind ? "bg-amber-500" : "bg-sage"
