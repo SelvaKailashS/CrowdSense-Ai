@@ -19,6 +19,24 @@ Traditional transport operations rely on **ad-hoc telephone dispatching**, which
 
 ---
 
+## 📸 Screenshots & Live Operations Preview
+
+### 1. Real-Time Transit Map & AIS-140 GPS Bus Tracking (Tamil Nadu)
+> *Interactive map tracking active TNSTC buses in real time along transit corridors, monitoring queue spillover, traffic choke points, and telecom density around temple festivals.*
+
+<p align="center">
+  <img src="docs/images/live_transit_map.png" alt="CrowdSense AI - Real-Time Transit Map & Live Bus Tracking" width="900" style="border-radius: 10px; box-shadow: 0 4px 20px rgba(0,0,0,0.3);" />
+</p>
+
+### 2. Predictive 15-Minute Crowd Demand Surge Curve & Departure Distribution
+> *Continuous fluid queue distribution modeling passenger outflow waves before and after the event climax, incorporating rain probability, modal share, and circulation cycle limits.*
+
+<p align="center">
+  <img src="docs/images/crowd_demand_curve.png" alt="CrowdSense AI - Predictive 15-Minute Crowd Demand Surge Curve" width="900" style="border-radius: 10px; box-shadow: 0 4px 20px rgba(0,0,0,0.3);" />
+</p>
+
+---
+
 ## 🚀 Key Capabilities & Four-Stage Framework
 
 ```
